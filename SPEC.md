@@ -4,6 +4,8 @@
 > - Você <ins>**não pode utilizar ferramentas de IA para escrever esta
 >   especificação**</ins>
 
+> Comentário Professor: Faltou preencher tudo abaixo.
+
 ## Integrantes da dupla
 
 - **Aluno 1 - Nome**: <mark>`<preencher>`</mark>

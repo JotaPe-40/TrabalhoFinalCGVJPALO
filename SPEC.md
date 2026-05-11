@@ -6,8 +6,8 @@
 
 ## Integrantes da dupla
 
-- **Aluno 1 - Nome**: <mark>`<preencher>`</mark>
-- **Aluno 1 - Cartão UFRGS**: <mark>`<preencher>`</mark>
+- **Aluno 1 - Nome**: <mark>`João Pedro Alvarenga`</mark>
+- **Aluno 1 - Cartão UFRGS**: <mark>`577252`</mark>
 
 - **Aluno 2 - Nome**: <mark>`<preencher>`</mark>
 - **Aluno 2 - Cartão UFRGS**: <mark>`<preencher>`</mark>
@@ -34,7 +34,7 @@
 >   do próprio repositório. Mas, garanta que qualquer um tenha
 >   permissão de acesso ao vídeo através deste link.
 
-<mark>`<preencher>`</mark>
+<mark>`https://www.youtube.com/watch?v=reroU16aQig`</mark>
 
 ### Vídeo - Timestamp
 
@@ -43,8 +43,8 @@
 >   será a base de comparação para avaliar se o seu trabalho final
 >   conseguiu ou não reproduzir a referência.
 
-- **Timestamp inicial**: <mark>`<preencher>`</mark>
-- **Timestamp final**: <mark>`<preencher>`</mark>
+- **Timestamp inicial**: <mark>`0:00`</mark>
+- **Timestamp final**: <mark>`0:30`</mark>
 
 ### Imagens
 
@@ -52,7 +52,10 @@
 > - Coloque aqui **três imagens** capturadas do vídeo acima, que você
 >   irá usar como ilustração para as explicações que vêm abaixo.
 
-<mark>`<preencher>`</mark>
+<mark>`...TrabalhoFinalCGVJPALO\assets\imagens_spec\Captura de tela 2026-05-11 110840.png
+       ...TrabalhoFinalCGVJPALO\assets\imagens_spec\Captura de tela 2026-05-11 111333.png
+       ...TrabalhoFinalCGVJPALO\assets\imagens_spec\Captura de tela 2026-05-11 111504.png'
+</mark>
 
 ## Especificação textual
 

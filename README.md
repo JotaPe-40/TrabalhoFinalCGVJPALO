@@ -3,3 +3,6 @@
 Este repositório contém o código base para o trabalho final. O enunciado completo do trabalho final está no Moodle:
 
 https://moodle.ufrgs.br/mod/assign/view.php?id=6018620
+
+
+https://www.youtube.com/watch?v=reroU16aQig

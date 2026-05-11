@@ -62,31 +62,34 @@
 Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final - Moodle](https://moodle.ufrgs.br/mod/assign/view.php?id=6018620)), escreva um parágrafo **curto** explicando como este requisito será atendido, apontando itens específicos do vídeo/imagens que você incluiu acima que atendem estes requisitos.
 
 ### Malhas poligonais complexas
-<mark>`<preencher>`</mark>
+<mark>`o ratinho que anda pelo labirinto sera refeito como um modelo poligonal complexo`</mark>
 
 ### Transformações geométricas controladas pelo usuário
-<mark>`<preencher>`</mark>
+<mark>`o controle de movimentação em primeira pessoa confere transformações geométricas controladas pelo usuário/jogador`</mark>
 
 ### Diferentes tipos de câmeras
-<mark>`<preencher>`</mark>
+<mark>`primeira pessoa e visualização por cima`</mark>
 
 ### Instâncias de objetos
-<mark>`<preencher>`</mark>
+<mark>`smile e ratos`</mark>
 
 ### Testes de intersecção
-<mark>`<preencher>`</mark>
+<mark>`teste de intersecção cubo-plano entre o jogador e as paredes 
+teste cubo-esfera entre o jogador e o smile, teste cubo-cubo entre o jogador e o rato`</mark>
 
 ### Modelos de Iluminação em todos os objetos
-<mark>`<preencher>`</mark>
+<mark>`a Iluminação do smile tera componente especular com shading gouraud, 
+as paredes terao componente especular com shading de phong, 
+o teto e o chao terão apenas componente difuso`</mark>
 
 ### Mapeamento de texturas em todos os objetos
-<mark>`<preencher>`</mark>
+<mark>`rato com coordenadas de textura do objeto, smile com projeção esférica, e o restante com projeção planar`</mark>
 
 ### Movimentação com curva Bézier cúbica
-<mark>`<preencher>`</mark>
+<mark>`movimentação aleatória do rato`</mark>
 
 ### Animações baseadas no tempo ($\Delta t$)
-<mark>`<preencher>`</mark>
+<mark>`faixa de velocidade do rato independente do framerate do projeto`</mark>
 
 ## Limitações esperadas
 
@@ -97,4 +100,4 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 > - Para cada item, **explique por que** não será implementado ou por
 >   que será implementado parcialmente.
 
-<mark>`<preencher>`</mark>
+<mark>`algumas texturas estarão levemente diferentes do original, o rato e o smile serão modelos 3d ao invés de imagens, os textos "opengl" encontrados em algumas paredes não serão aplicados, todas essas mudanças visam o foco do projeto no cumprimento da especificação do trabalho`</mark>

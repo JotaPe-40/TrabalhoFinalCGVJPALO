@@ -30,6 +30,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <algorithm>
+#include <random>
+#include <ctime>
 
 // Headers das bibliotecas OpenGL
 #include <glad/glad.h>   // Criação de contexto OpenGL 3.3
@@ -327,6 +329,9 @@ int main(int argc, char* argv[])
     ComputeNormals(&planemodel);
     BuildTrianglesAndAddToVirtualScene(&planemodel);
 
+    // Constrói o cubo usado para as paredes do labirinto
+    BuildCubeAndAddToVirtualScene(1.0f, "wall_cube");
+
     if ( argc > 1 )
     {
         ObjModel model(argv[1]);
@@ -353,6 +358,60 @@ int main(int argc, char* argv[])
     }
 
     double lastTime = glfwGetTime();
+    
+    // --- Maze generation parameters ---
+    const int mazeW = 10;
+    const int mazeH = 10;
+    const float cellSize = 1.0f; // world units per cell (plane is scaled x10)
+    const float wallThickness = 0.01f; // very thin walls (rendered as almost-planar)
+    const float wallHeight = 1.0f;
+
+    // Simple maze: start with all walls, carve a simple random maze (recursive backtracker)
+    std::vector<std::vector<int>> visited(mazeH, std::vector<int>(mazeW,0));
+    // walls: horizontals and verticals
+    std::vector<std::vector<int>> wallHorz(mazeH+1, std::vector<int>(mazeW,1)); // between rows
+    std::vector<std::vector<int>> wallVert(mazeH, std::vector<int>(mazeW+1,1)); // between cols
+
+    // recursive backtracker
+    std::vector<std::pair<int,int>> stack;
+    auto neighbors = [&](int r,int c){
+        std::vector<std::pair<int,int>> nb;
+        if (r>0 && !visited[r-1][c]) nb.emplace_back(r-1,c);
+        if (r<mazeH-1 && !visited[r+1][c]) nb.emplace_back(r+1,c);
+        if (c>0 && !visited[r][c-1]) nb.emplace_back(r,c-1);
+        if (c<mazeW-1 && !visited[r][c+1]) nb.emplace_back(r,c+1);
+        return nb;
+    };
+    std::mt19937 rng((unsigned)time(NULL));
+    int sr=0, sc=0;
+    visited[sr][sc]=1;
+    stack.emplace_back(sr,sc);
+    while(!stack.empty()){
+        auto cell = stack.back();
+        int r = cell.first;
+        int c = cell.second;
+        auto nb = neighbors(r,c);
+        if (nb.empty()) { stack.pop_back(); continue; }
+        std::uniform_int_distribution<int> dist(0,(int)nb.size()-1);
+        int idx = dist(rng);
+        int nr = nb[idx].first;
+        int nc = nb[idx].second;
+        // remove wall between (r,c) and (nr,nc)
+        if (nr==r-1) { wallHorz[r][c]=0; } // north
+        else if (nr==r+1) { wallHorz[r+1][c]=0; } // south
+        else if (nc==c-1) { wallVert[r][c]=0; } // west
+        else if (nc==c+1) { wallVert[r][c+1]=0; } // east
+        visited[nr][nc]=1;
+        stack.emplace_back(nr,nc);
+    }
+
+    // Spawn no centro de uma célula (evita nascer sobre linha de parede).
+    g_PlayerPosition = glm::vec3(
+        (sc - mazeW/2.0f + 0.5f) * cellSize,
+        g_GroundY,
+        (sr - mazeH/2.0f + 0.5f) * cellSize
+    );
+
 
     // Ficamos em um loop infinito, renderizando, até que o usuário feche a janela
     while (!glfwWindowShouldClose(window))
@@ -399,17 +458,66 @@ int main(int argc, char* argv[])
         float speed = g_PlayerSpeed;
         if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) speed *= 2.0f;
 
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-            g_PlayerPosition += forward_xz * speed * dt;
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-            g_PlayerPosition -= forward_xz * speed * dt;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-            g_PlayerPosition -= glm::normalize(glm::vec3(right3.x,0.0f,right3.z)) * speed * dt;
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-            g_PlayerPosition += glm::normalize(glm::vec3(right3.x,0.0f,right3.z)) * speed * dt;
+        glm::vec3 prevPos = g_PlayerPosition;
+        glm::vec3 moveDelta = glm::vec3(0.0f, 0.0f, 0.0f);
 
-        // Mantém o jogador no centro do plano e impede que a hitbox atravesse o chão.
-        g_PlayerPosition = ConstrainPlayerToGround(g_PlayerPosition);
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+            moveDelta += forward_xz * speed * dt;
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+            moveDelta -= forward_xz * speed * dt;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+            moveDelta -= glm::normalize(glm::vec3(right3.x,0.0f,right3.z)) * speed * dt;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+            moveDelta += glm::normalize(glm::vec3(right3.x,0.0f,right3.z)) * speed * dt;
+
+        const float eps = 0.05f;
+        auto collidesAt = [&](const glm::vec3& testPos)
+        {
+            glm::vec3 pmin = glm::vec3(testPos.x - g_PlayerHalfWidth, testPos.y, testPos.z - g_PlayerHalfDepth);
+            glm::vec3 pmax = glm::vec3(testPos.x + g_PlayerHalfWidth, testPos.y + g_PlayerHalfHeight, testPos.z + g_PlayerHalfDepth);
+
+            bool collided = false;
+            for(int i=0;i<=mazeH && !collided;i++){
+                for(int j=0;j<mazeW && !collided;j++){
+                    if (wallHorz[i][j]){
+                        float x = (j - mazeW/2.0f + 0.5f) * cellSize;
+                        float z = (i - mazeH/2.0f) * cellSize;
+                        float wall_xmin = x - cellSize/2.0f;
+                        float wall_xmax = x + cellSize/2.0f;
+                        bool overlapX = (pmin.x <= wall_xmax) && (pmax.x >= wall_xmin);
+                        float dz = fabs(testPos.z - z);
+                        if (overlapX && dz < (g_PlayerHalfDepth + eps)) collided = true;
+                    }
+                }
+            }
+            for(int i=0;i<mazeH && !collided;i++){
+                for(int j=0;j<=mazeW && !collided;j++){
+                    if (wallVert[i][j]){
+                        float x = (j - mazeW/2.0f) * cellSize;
+                        float z = (i - mazeH/2.0f + 0.5f) * cellSize;
+                        float wall_zmin = z - cellSize/2.0f;
+                        float wall_zmax = z + cellSize/2.0f;
+                        bool overlapZ = (pmin.z <= wall_zmax) && (pmax.z >= wall_zmin);
+                        float dx = fabs(testPos.x - x);
+                        if (overlapZ && dx < (g_PlayerHalfWidth + eps)) collided = true;
+                    }
+                }
+            }
+            return collided;
+        };
+
+        // Axis sliding: resolve X then Z so player can slide along walls.
+        glm::vec3 tryPos = ConstrainPlayerToGround(prevPos);
+        tryPos.x += moveDelta.x;
+        if (!collidesAt(tryPos))
+            prevPos.x = tryPos.x;
+
+        tryPos = ConstrainPlayerToGround(prevPos);
+        tryPos.z += moveDelta.z;
+        if (!collidesAt(tryPos))
+            prevPos.z = tryPos.z;
+
+        g_PlayerPosition = ConstrainPlayerToGround(prevPos);
 
         // Camera position and view
         glm::vec4 camera_position_c  = glm::vec4(g_PlayerPosition.x, g_PlayerPosition.y + g_PlayerEyeHeight, g_PlayerPosition.z, 1.0f);
@@ -455,6 +563,7 @@ int main(int argc, char* argv[])
         glUniformMatrix4fv(g_projection_uniform , 1 , GL_FALSE , glm::value_ptr(projection));
 
                 #define PLANE  2
+                #define WALL   3
 
         // Desenhamos o plano do chão
                 model = Matrix_Translate(0.0f, g_GroundY, 0.0f) * Matrix_Scale(10.0f, 1.0f, 10.0f);
@@ -463,6 +572,40 @@ int main(int argc, char* argv[])
                 // Repetições da textura no plano (tiling)
                 if (g_texture_repeat_uniform != -1) glUniform1f(g_texture_repeat_uniform, 10.0f);
         DrawVirtualObject("the_plane");
+
+        // Draw maze walls (render double-sided and with low tiling)
+        glUniform1i(g_object_id_uniform, WALL);
+        if (g_texture_repeat_uniform != -1) glUniform1f(g_texture_repeat_uniform, 1.0f);
+        glDisable(GL_CULL_FACE);
+        // horizontal walls
+        for(int i=0;i<=mazeH;i++){
+            for(int j=0;j<mazeW;j++){
+                if (wallHorz[i][j]){
+                    float x = (j - mazeW/2.0f + 0.5f) * cellSize;
+                    float z = (i - mazeH/2.0f) * cellSize;
+                    glm::mat4 wm = Matrix_Translate(x, g_GroundY + wallHeight/2.0f, z)
+                                 * Matrix_Scale(cellSize, wallHeight, wallThickness);
+                    glUniformMatrix4fv(g_model_uniform, 1 , GL_FALSE , glm::value_ptr(wm));
+                    DrawVirtualObject("wall_cube");
+                }
+            }
+        }
+        // vertical walls
+        for(int i=0;i<mazeH;i++){
+            for(int j=0;j<=mazeW;j++){
+                if (wallVert[i][j]){
+                    float x = (j - mazeW/2.0f) * cellSize;
+                    float z = (i - mazeH/2.0f + 0.5f) * cellSize;
+                    glm::mat4 wm = Matrix_Translate(x, g_GroundY + wallHeight/2.0f, z)
+                                 * Matrix_Scale(wallThickness, wallHeight, cellSize);
+                    glUniformMatrix4fv(g_model_uniform, 1 , GL_FALSE , glm::value_ptr(wm));
+                    DrawVirtualObject("wall_cube");
+                }
+            }
+        }
+        glEnable(GL_CULL_FACE);
+        // restore plane tiling for next frame
+        if (g_texture_repeat_uniform != -1) glUniform1f(g_texture_repeat_uniform, 10.0f);
 
           // O jogador agora é somente uma hitbox cúbica invisível para colisão.
 
@@ -497,6 +640,119 @@ int main(int argc, char* argv[])
 
     // Fim do programa
     return 0;
+}
+
+// Implementation of BuildCubeAndAddToVirtualScene (placed after SceneObject definition)
+void BuildCubeAndAddToVirtualScene(float size, const char* name)
+{
+    float h = size / 2.0f;
+
+    std::vector<GLuint> indices = {
+        0,1,2, 3,4,5,
+        6,7,8, 9,10,11,
+        12,13,14, 15,16,17,
+        18,19,20, 21,22,23,
+        24,25,26, 27,28,29,
+        30,31,32, 33,34,35
+    };
+
+    std::vector<float> model_coefficients;
+    std::vector<float> normal_coefficients;
+    std::vector<float> texture_coefficients;
+
+    auto v = [&](float x,float y,float z,float nx,float ny,float nz,float u,float vv){
+        model_coefficients.push_back(x); model_coefficients.push_back(y); model_coefficients.push_back(z); model_coefficients.push_back(1.0f);
+        normal_coefficients.push_back(nx); normal_coefficients.push_back(ny); normal_coefficients.push_back(nz); normal_coefficients.push_back(0.0f);
+        texture_coefficients.push_back(u); texture_coefficients.push_back(vv);
+    };
+
+    // front
+    v(-h,-h, h, 0,0,1, 0.0f, 0.0f);
+    v( h,-h, h, 0,0,1, 1.0f, 0.0f);
+    v( h, h, h, 0,0,1, 1.0f, 1.0f);
+    v( h, h, h, 0,0,1, 1.0f, 1.0f);
+    v(-h, h, h, 0,0,1, 0.0f, 1.0f);
+    v(-h,-h, h, 0,0,1, 0.0f, 0.0f);
+    // back
+    v( h,-h,-h, 0,0,-1, 0.0f, 0.0f);
+    v(-h,-h,-h, 0,0,-1, 1.0f, 0.0f);
+    v(-h, h,-h, 0,0,-1, 1.0f, 1.0f);
+    v(-h, h,-h, 0,0,-1, 1.0f, 1.0f);
+    v( h, h,-h, 0,0,-1, 0.0f, 1.0f);
+    v( h,-h,-h, 0,0,-1, 0.0f, 0.0f);
+    // left
+    v(-h,-h,-h, -1,0,0, 0.0f, 0.0f);
+    v(-h,-h, h, -1,0,0, 1.0f, 0.0f);
+    v(-h, h, h, -1,0,0, 1.0f, 1.0f);
+    v(-h, h, h, -1,0,0, 1.0f, 1.0f);
+    v(-h, h,-h, -1,0,0, 0.0f, 1.0f);
+    v(-h,-h,-h, -1,0,0, 0.0f, 0.0f);
+    // right
+    v( h,-h, h, 1,0,0, 0.0f, 0.0f);
+    v( h,-h,-h, 1,0,0, 1.0f, 0.0f);
+    v( h, h,-h, 1,0,0, 1.0f, 1.0f);
+    v( h, h,-h, 1,0,0, 1.0f, 1.0f);
+    v( h, h, h, 1,0,0, 0.0f, 1.0f);
+    v( h,-h, h, 1,0,0, 0.0f, 0.0f);
+    // top
+    v(-h, h, h, 0,1,0, 0.0f, 0.0f);
+    v( h, h, h, 0,1,0, 1.0f, 0.0f);
+    v( h, h,-h, 0,1,0, 1.0f, 1.0f);
+    v( h, h,-h, 0,1,0, 1.0f, 1.0f);
+    v(-h, h,-h, 0,1,0, 0.0f, 1.0f);
+    v(-h, h, h, 0,1,0, 0.0f, 0.0f);
+    // bottom
+    v(-h,-h,-h, 0,-1,0, 0.0f, 0.0f);
+    v( h,-h,-h, 0,-1,0, 1.0f, 0.0f);
+    v( h,-h, h, 0,-1,0, 1.0f, 1.0f);
+    v( h,-h, h, 0,-1,0, 1.0f, 1.0f);
+    v(-h,-h, h, 0,-1,0, 0.0f, 1.0f);
+    v(-h,-h,-h, 0,-1,0, 0.0f, 0.0f);
+
+    GLuint vertex_array_object_id;
+    glGenVertexArrays(1, &vertex_array_object_id);
+    glBindVertexArray(vertex_array_object_id);
+
+    GLuint VBO_model_coefficients_id;
+    glGenBuffers(1, &VBO_model_coefficients_id);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO_model_coefficients_id);
+    glBufferData(GL_ARRAY_BUFFER, model_coefficients.size() * sizeof(float), model_coefficients.data(), GL_STATIC_DRAW);
+    GLuint location = 0;
+    glVertexAttribPointer(location, 4, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(location);
+
+    GLuint VBO_normal_coefficients_id;
+    glGenBuffers(1, &VBO_normal_coefficients_id);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO_normal_coefficients_id);
+    glBufferData(GL_ARRAY_BUFFER, normal_coefficients.size() * sizeof(float), normal_coefficients.data(), GL_STATIC_DRAW);
+    location = 1;
+    glVertexAttribPointer(location, 4, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(location);
+
+    GLuint VBO_texture_coefficients_id;
+    glGenBuffers(1, &VBO_texture_coefficients_id);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO_texture_coefficients_id);
+    glBufferData(GL_ARRAY_BUFFER, texture_coefficients.size() * sizeof(float), texture_coefficients.data(), GL_STATIC_DRAW);
+    location = 2;
+    glVertexAttribPointer(location, 2, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(location);
+
+    GLuint indices_id;
+    glGenBuffers(1, &indices_id);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indices_id);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(GLuint), indices.data(), GL_STATIC_DRAW);
+
+    glBindVertexArray(0);
+
+    SceneObject theobject;
+    theobject.name = name;
+    theobject.first_index = 0;
+    theobject.num_indices = indices.size();
+    theobject.rendering_mode = GL_TRIANGLES;
+    theobject.vertex_array_object_id = vertex_array_object_id;
+    theobject.bbox_min = glm::vec3(-h,-h,-h);
+    theobject.bbox_max = glm::vec3(h,h,h);
+    g_VirtualScene[name] = theobject;
 }
 
 // Função que carrega uma imagem para ser utilizada como textura

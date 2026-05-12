@@ -100,4 +100,4 @@ o teto e o chao terão apenas componente difuso`</mark>
 > - Para cada item, **explique por que** não será implementado ou por
 >   que será implementado parcialmente.
 
-<mark>`algumas texturas estarão levemente diferentes do original, o rato e o smile serão modelos 3d ao invés de imagens, os textos "opengl" encontrados em algumas paredes não serão aplicados, todas essas mudanças visam o foco do projeto no cumprimento da especificação do trabalho`</mark>
+<mark>`algumas texturas estarão levemente diferentes do original, o rato e o smile serão modelos 3d ao invés de imagens, os textos "opengl" encontrados em algumas paredes não serão aplicados, e os caminhos do labirinto podem estar diferentes dos omostrados no vídeo todas essas mudanças visam o foco do projeto no cumprimento da especificação do trabalho`</mark>

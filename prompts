@@ -1,0 +1,3 @@
+o projeto consiste em recriar um jogo de labirinto antigo, para começar, crie o inicio do programa onde é gerado um mapa que consiste um um plano onde o jogador vai ficar, crie  tambem o objeto do jogador que sera um cubo, crie tambem a camera em primeira pessoa e implemente a movimentação inicial
+
+vamos fazer as seguintes mudancas, remova o coelho e a bola, remova o plano preto abaixo do player, mantenha o plano de grama que ja existe, faca com que o ponto inicial seja no centro desse plano e na altura do plano, crie uma hitbox cubo para o jogador e crie uma colisao cubo plano entre o player e o chao

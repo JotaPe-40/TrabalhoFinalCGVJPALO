@@ -111,6 +111,7 @@ struct ObjModel
 // Declaração de funções utilizadas para pilha de matrizes de modelagem.
 void PushMatrix(glm::mat4 M);
 void PopMatrix(glm::mat4& M);
+void BuildCubeAndAddToVirtualScene(float size, const char* name);
 
 // Declaração de várias funções utilizadas em main().  Essas estão definidas
 // logo após a definição de main() neste arquivo.
@@ -119,6 +120,7 @@ void ComputeNormals(ObjModel* model); // Computa normais de um ObjModel, caso n�
 void LoadShadersFromFiles(); // Carrega os shaders de vértice e fragmento, criando um programa de GPU
 void LoadTextureImage(const char* filename); // Função que carrega imagens de textura
 void DrawVirtualObject(const char* object_name); // Desenha um objeto armazenado em g_VirtualScene
+glm::vec3 ConstrainPlayerToGround(glm::vec3 candidate_position);
 GLuint LoadShader_Vertex(const char* filename);   // Carrega um vertex shader
 GLuint LoadShader_Fragment(const char* filename); // Carrega um fragment shader
 void LoadShader(const char* filename, GLuint shader_id); // Função utilizada pelas duas acima
@@ -199,6 +201,23 @@ float g_CameraTheta = 0.0f; // Ângulo no plano ZX em relação ao eixo Z
 float g_CameraPhi = 0.0f;   // Ângulo em relação ao eixo Y
 float g_CameraDistance = 3.5f; // Distância da câmera para a origem
 
+// First-person player / camera
+float g_GroundY = -1.1f;
+glm::vec3 g_PlayerPosition = glm::vec3(0.0f, g_GroundY, 0.0f);
+float g_PlayerYaw = 3.1415926f; // Facing -Z by default
+float g_PlayerPitch = 0.0f;
+float g_PlayerSpeed = 3.0f; // units per second
+float g_PlayerEyeHeight = 0.6f;
+float g_PlayerHalfWidth = 0.25f;
+float g_PlayerHalfHeight = 0.50f;
+float g_PlayerHalfDepth = 0.25f;
+bool g_FpsMode = true; // enable FPS camera and controls
+bool g_FirstMouse = true;
+// Last cursor positions (used by mouse callbacks and FPS init)
+double g_LastCursorPosX = 0.0;
+double g_LastCursorPosY = 0.0;
+
+
 // Variáveis que controlam rotação do antebraço
 float g_ForearmAngleZ = 0.0f;
 float g_ForearmAngleX = 0.0f;
@@ -221,6 +240,7 @@ GLint g_projection_uniform;
 GLint g_object_id_uniform;
 GLint g_bbox_min_uniform;
 GLint g_bbox_max_uniform;
+GLint g_texture_repeat_uniform;
 
 // Número de texturas carregadas pela função LoadTextureImage()
 GLuint g_NumLoadedTextures = 0;
@@ -299,19 +319,11 @@ int main(int argc, char* argv[])
     LoadShadersFromFiles();
 
     // Carregamos duas imagens para serem utilizadas como textura
-    LoadTextureImage("../../data/red_brick_diff_1k.jpg");      // TextureImage0
-    LoadTextureImage("../../data/rocky_terrain_02_diff_1k.jpg"); // TextureImage1
+    LoadTextureImage("data/red_brick_diff_1k.jpg");      // TextureImage0 (unused here, kept for examples)
+    LoadTextureImage("assets/sand.png"); // TextureImage1 -> sand
 
-    // Construímos a representação de objetos geométricos através de malhas de triângulos
-    ObjModel spheremodel("../../data/sphere.obj");
-    ComputeNormals(&spheremodel);
-    BuildTrianglesAndAddToVirtualScene(&spheremodel);
-
-    ObjModel bunnymodel("../../data/bunny.obj");
-    ComputeNormals(&bunnymodel);
-    BuildTrianglesAndAddToVirtualScene(&bunnymodel);
-
-    ObjModel planemodel("../../data/plane.obj");
+    // Construímos apenas o chão/grama.
+    ObjModel planemodel("data/plane.obj");
     ComputeNormals(&planemodel);
     BuildTrianglesAndAddToVirtualScene(&planemodel);
 
@@ -331,6 +343,16 @@ int main(int argc, char* argv[])
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
+
+    // Capture mouse cursor for first-person view
+    if (g_FpsMode)
+    {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        glfwGetCursorPos(window, &g_LastCursorPosX, &g_LastCursorPosY);
+        g_FirstMouse = true;
+    }
+
+    double lastTime = glfwGetTime();
 
     // Ficamos em um loop infinito, renderizando, até que o usuário feche a janela
     while (!glfwWindowShouldClose(window))
@@ -353,24 +375,46 @@ int main(int argc, char* argv[])
         // os shaders de vértice e fragmentos).
         glUseProgram(g_GpuProgramID);
 
-        // Computamos a posição da câmera utilizando coordenadas esféricas.  As
-        // variáveis g_CameraDistance, g_CameraPhi, e g_CameraTheta são
-        // controladas pelo mouse do usuário. Veja as funções CursorPosCallback()
-        // e ScrollCallback().
-        float r = g_CameraDistance;
-        float y = r*sin(g_CameraPhi);
-        float z = r*cos(g_CameraPhi)*cos(g_CameraTheta);
-        float x = r*cos(g_CameraPhi)*sin(g_CameraTheta);
+        // Compute delta time
+        double currentTime = glfwGetTime();
+        float dt = (float)(currentTime - lastTime);
+        lastTime = currentTime;
 
-        // Abaixo definimos as varáveis que efetivamente definem a câmera virtual.
-        // Veja slides 195-227 e 229-234 do documento Aula_08_Sistemas_de_Coordenadas.pdf.
-        glm::vec4 camera_position_c  = glm::vec4(x,y,z,1.0f); // Ponto "c", centro da câmera
-        glm::vec4 camera_lookat_l    = glm::vec4(0.0f,0.0f,0.0f,1.0f); // Ponto "l", para onde a câmera (look-at) estará sempre olhando
-        glm::vec4 camera_view_vector = camera_lookat_l - camera_position_c; // Vetor "view", sentido para onde a câmera está virada
-        glm::vec4 camera_up_vector   = glm::vec4(0.0f,1.0f,0.0f,0.0f); // Vetor "up" fixado para apontar para o "céu" (eito Y global)
+        // FPS camera: compute front vector from yaw/pitch
+        glm::vec3 front3;
+        front3.x = cosf(g_PlayerPitch) * sinf(g_PlayerYaw);
+        front3.y = sinf(g_PlayerPitch);
+        front3.z = cosf(g_PlayerPitch) * cosf(g_PlayerYaw);
+        front3 = glm::normalize(front3);
 
-        // Computamos a matriz "View" utilizando os parâmetros da câmera para
-        // definir o sistema de coordenadas da câmera.  Veja slides 2-14, 184-190 e 236-242 do documento Aula_08_Sistemas_de_Coordenadas.pdf.
+        // Movement: WASD
+        glm::vec4 front4 = glm::vec4(front3, 0.0f);
+        glm::vec4 up4 = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
+        glm::vec4 right4 = crossproduct(front4, up4);
+        float rlen = norm(right4);
+        glm::vec3 right3 = (rlen > 1e-6f) ? glm::vec3(right4.x/rlen, right4.y/rlen, right4.z/rlen) : glm::vec3(1.0f,0.0f,0.0f);
+
+        glm::vec3 forward_xz = glm::normalize(glm::vec3(front3.x, 0.0f, front3.z));
+
+        float speed = g_PlayerSpeed;
+        if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) speed *= 2.0f;
+
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+            g_PlayerPosition += forward_xz * speed * dt;
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+            g_PlayerPosition -= forward_xz * speed * dt;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+            g_PlayerPosition -= glm::normalize(glm::vec3(right3.x,0.0f,right3.z)) * speed * dt;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+            g_PlayerPosition += glm::normalize(glm::vec3(right3.x,0.0f,right3.z)) * speed * dt;
+
+        // Mantém o jogador no centro do plano e impede que a hitbox atravesse o chão.
+        g_PlayerPosition = ConstrainPlayerToGround(g_PlayerPosition);
+
+        // Camera position and view
+        glm::vec4 camera_position_c  = glm::vec4(g_PlayerPosition.x, g_PlayerPosition.y + g_PlayerEyeHeight, g_PlayerPosition.z, 1.0f);
+        glm::vec4 camera_view_vector = glm::vec4(front3, 0.0f);
+        glm::vec4 camera_up_vector   = glm::vec4(0.0f,1.0f,0.0f,0.0f);
         glm::mat4 view = Matrix_Camera_View(camera_position_c, camera_view_vector, camera_up_vector);
 
         // Agora computamos a matriz de Projeção.
@@ -410,31 +454,17 @@ int main(int argc, char* argv[])
         glUniformMatrix4fv(g_view_uniform       , 1 , GL_FALSE , glm::value_ptr(view));
         glUniformMatrix4fv(g_projection_uniform , 1 , GL_FALSE , glm::value_ptr(projection));
 
-        #define SPHERE 0
-        #define BUNNY  1
-        #define PLANE  2
-
-        // Desenhamos o modelo da esfera
-        model = Matrix_Translate(-1.0f,0.0f,0.0f)
-              * Matrix_Rotate_Z(0.6f)
-              * Matrix_Rotate_X(0.2f)
-              * Matrix_Rotate_Y(g_AngleY + (float)glfwGetTime() * 0.1f);
-        glUniformMatrix4fv(g_model_uniform, 1 , GL_FALSE , glm::value_ptr(model));
-        glUniform1i(g_object_id_uniform, SPHERE);
-        DrawVirtualObject("the_sphere");
-
-        // Desenhamos o modelo do coelho
-        model = Matrix_Translate(1.0f,0.0f,0.0f)
-              * Matrix_Rotate_X(g_AngleX + (float)glfwGetTime() * 0.1f);
-        glUniformMatrix4fv(g_model_uniform, 1 , GL_FALSE , glm::value_ptr(model));
-        glUniform1i(g_object_id_uniform, BUNNY);
-        DrawVirtualObject("the_bunny");
+                #define PLANE  2
 
         // Desenhamos o plano do chão
-        model = Matrix_Translate(0.0f,-1.1f,0.0f);
+                model = Matrix_Translate(0.0f, g_GroundY, 0.0f) * Matrix_Scale(10.0f, 1.0f, 10.0f);
         glUniformMatrix4fv(g_model_uniform, 1 , GL_FALSE , glm::value_ptr(model));
-        glUniform1i(g_object_id_uniform, PLANE);
+                glUniform1i(g_object_id_uniform, PLANE);
+                // Repetições da textura no plano (tiling)
+                if (g_texture_repeat_uniform != -1) glUniform1f(g_texture_repeat_uniform, 10.0f);
         DrawVirtualObject("the_plane");
+
+          // O jogador agora é somente uma hitbox cúbica invisível para colisão.
 
         // Imprimimos na tela os ângulos de Euler que controlam a rotação do
         // terceiro cubo.
@@ -496,8 +526,9 @@ void LoadTextureImage(const char* filename)
     glGenSamplers(1, &sampler_id);
 
     // Veja slides 95-96 do documento Aula_20_Mapeamento_de_Texturas.pdf
-    glSamplerParameteri(sampler_id, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glSamplerParameteri(sampler_id, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // Para permitir repetição (tiling) da textura no plano, usamos REPEAT.
+    glSamplerParameteri(sampler_id, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glSamplerParameteri(sampler_id, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
     // Parâmetros de amostragem da textura.
     glSamplerParameteri(sampler_id, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -577,8 +608,8 @@ void LoadShadersFromFiles()
     //       |
     //       o-- shader_fragment.glsl
     //
-    GLuint vertex_shader_id = LoadShader_Vertex("../../src/shader_vertex.glsl");
-    GLuint fragment_shader_id = LoadShader_Fragment("../../src/shader_fragment.glsl");
+    GLuint vertex_shader_id = LoadShader_Vertex("src/shader_vertex.glsl");
+    GLuint fragment_shader_id = LoadShader_Fragment("src/shader_fragment.glsl");
 
     // Deletamos o programa de GPU anterior, caso ele exista.
     if ( g_GpuProgramID != 0 )
@@ -602,6 +633,7 @@ void LoadShadersFromFiles()
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage0"), 0);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage1"), 1);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage2"), 2);
+    g_texture_repeat_uniform = glGetUniformLocation(g_GpuProgramID, "TextureRepeat");
     glUseProgram(0);
 }
 
@@ -887,6 +919,14 @@ void BuildTrianglesAndAddToVirtualScene(ObjModel* model)
     glBindVertexArray(0);
 }
 
+// A hitbox do jogador é um cubo invisível apoiado no plano do chão.
+// A posição g_PlayerPosition representa os pés do jogador no centro do mapa.
+glm::vec3 ConstrainPlayerToGround(glm::vec3 candidate_position)
+{
+    candidate_position.y = g_GroundY;
+    return candidate_position;
+}
+
 // Carrega um Vertex Shader de um arquivo GLSL. Veja definição de LoadShader() abaixo.
 GLuint LoadShader_Vertex(const char* filename)
 {
@@ -1060,7 +1100,6 @@ void FramebufferSizeCallback(GLFWwindow* window, int width, int height)
 // Variáveis globais que armazenam a última posição do cursor do mouse, para
 // que possamos calcular quanto que o mouse se movimentou entre dois instantes
 // de tempo. Utilizadas no callback CursorPosCallback() abaixo.
-double g_LastCursorPosX, g_LastCursorPosY;
 
 // Função callback chamada sempre que o usuário aperta algum dos botões do mouse
 void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
@@ -1119,36 +1158,31 @@ void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
 // cima da janela OpenGL.
 void CursorPosCallback(GLFWwindow* window, double xpos, double ypos)
 {
-    // Abaixo executamos o seguinte: caso o botão esquerdo do mouse esteja
-    // pressionado, computamos quanto que o mouse se movimento desde o último
-    // instante de tempo, e usamos esta movimentação para atualizar os
-    // parâmetros que definem a posição da câmera dentro da cena virtual.
-    // Assim, temos que o usuário consegue controlar a câmera.
-
-    if (g_LeftMouseButtonPressed)
+    // If FPS mode is enabled, use mouse movement to control yaw/pitch
+    if (g_FpsMode)
     {
-        // Deslocamento do cursor do mouse em x e y de coordenadas de tela!
+        if (g_FirstMouse)
+        {
+            g_LastCursorPosX = xpos;
+            g_LastCursorPosY = ypos;
+            g_FirstMouse = false;
+        }
+
         float dx = xpos - g_LastCursorPosX;
         float dy = ypos - g_LastCursorPosY;
-    
-        // Atualizamos parâmetros da câmera com os deslocamentos
-        g_CameraTheta -= 0.01f*dx;
-        g_CameraPhi   += 0.01f*dy;
-    
-        // Em coordenadas esféricas, o ângulo phi deve ficar entre -pi/2 e +pi/2.
-        float phimax = 3.141592f/2;
-        float phimin = -phimax;
-    
-        if (g_CameraPhi > phimax)
-            g_CameraPhi = phimax;
-    
-        if (g_CameraPhi < phimin)
-            g_CameraPhi = phimin;
-    
-        // Atualizamos as variáveis globais para armazenar a posição atual do
-        // cursor como sendo a última posição conhecida do cursor.
+
+        float sensitivity = 0.0025f;
+        g_PlayerYaw   -= sensitivity * dx;
+        g_PlayerPitch -= sensitivity * dy;
+
+        // Clamp pitch
+        const float pitchMax = 3.1415926f/2.0f - 0.01f;
+        if (g_PlayerPitch > pitchMax) g_PlayerPitch = pitchMax;
+        if (g_PlayerPitch < -pitchMax) g_PlayerPitch = -pitchMax;
+
         g_LastCursorPosX = xpos;
         g_LastCursorPosY = ypos;
+        return;
     }
 
     if (g_RightMouseButtonPressed)

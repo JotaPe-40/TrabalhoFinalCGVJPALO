@@ -343,7 +343,7 @@ int main(int argc, char *argv[])
     LoadShadersFromFiles();
 
     // Carregamos duas imagens para serem utilizadas como textura
-    LoadTextureImage(FindFile("data/red_brick_diff_1k.jpg").c_str());
+    LoadTextureImage(FindFile("data/parede.png").c_str());
     LoadTextureImage(FindFile("assets/sand.png").c_str());
 
     // Construímos apenas o chão/grama.

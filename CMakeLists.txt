@@ -7,6 +7,7 @@
 # ser compilados.
 set(SOURCES
   src/main.cpp
+  src/maze.cpp
   src/correcao.cpp
   src/textrendering.cpp
   src/tiny_obj_loader.cpp

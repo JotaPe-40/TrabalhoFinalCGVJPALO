@@ -53,6 +53,10 @@
 
 // Estrutura que representa um modelo geométrico carregado a partir de um
 // arquivo ".obj". Veja https://en.wikipedia.org/wiki/Wavefront_.obj_file .
+
+// NOSSOS INCLUDES
+#include "maze.h"
+
 struct ObjModel
 {
     tinyobj::attrib_t attrib;
@@ -379,73 +383,9 @@ int main(int argc, char *argv[])
 
     double lastTime = glfwGetTime();
 
-    // --- Maze generation parameters ---
-    const int mazeW = 10;
-    const int mazeH = 10;
-    const float cellSize = 1.0f;       // world units per cell (plane is scaled x10)
-    const float wallThickness = 0.01f; // very thin walls (rendered as almost-planar)
-    const float wallHeight = 1.0f;
-
-    // Simple maze: start with all walls, carve a simple random maze (recursive backtracker)
-    std::vector<std::vector<int>> visited(mazeH, std::vector<int>(mazeW, 0));
-    // walls: horizontals and verticals
-    std::vector<std::vector<int>> wallHorz(mazeH + 1, std::vector<int>(mazeW, 1)); // between rows
-    std::vector<std::vector<int>> wallVert(mazeH, std::vector<int>(mazeW + 1, 1)); // between cols
-
-    // recursive backtracker
-    std::vector<std::pair<int, int>> stack;
-    auto neighbors = [&](int r, int c)
-    {
-        std::vector<std::pair<int, int>> nb;
-        if (r > 0 && !visited[r - 1][c])
-            nb.emplace_back(r - 1, c);
-        if (r < mazeH - 1 && !visited[r + 1][c])
-            nb.emplace_back(r + 1, c);
-        if (c > 0 && !visited[r][c - 1])
-            nb.emplace_back(r, c - 1);
-        if (c < mazeW - 1 && !visited[r][c + 1])
-            nb.emplace_back(r, c + 1);
-        return nb;
-    };
-    std::mt19937 rng((unsigned)time(NULL));
-    int sr = 0, sc = 0;
-    visited[sr][sc] = 1;
-    stack.emplace_back(sr, sc);
-    while (!stack.empty())
-    {
-        auto cell = stack.back();
-        int r = cell.first;
-        int c = cell.second;
-        auto nb = neighbors(r, c);
-        if (nb.empty())
-        {
-            stack.pop_back();
-            continue;
-        }
-        std::uniform_int_distribution<int> dist(0, (int)nb.size() - 1);
-        int idx = dist(rng);
-        int nr = nb[idx].first;
-        int nc = nb[idx].second;
-        // remove wall between (r,c) and (nr,nc)
-        if (nr == r - 1)
-        {
-            wallHorz[r][c] = 0;
-        } // north
-        else if (nr == r + 1)
-        {
-            wallHorz[r + 1][c] = 0;
-        } // south
-        else if (nc == c - 1)
-        {
-            wallVert[r][c] = 0;
-        } // west
-        else if (nc == c + 1)
-        {
-            wallVert[r][c + 1] = 0;
-        } // east
-        visited[nr][nc] = 1;
-        stack.emplace_back(nr, nc);
-    }
+    GenerateMaze(); // REFATORAÇÃO - SEPARA CÓDIGO DO LABIRINTO EM OUTRO ARQUIVO
+    int sr = 0;
+    int sc = 0;
 
     // Spawn no centro de uma célula (evita nascer sobre linha de parede).
     g_PlayerPosition = glm::vec3(

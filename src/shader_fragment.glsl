@@ -23,6 +23,7 @@ uniform mat4 projection;
 #define BUNNY  1
 #define PLANE  2
 #define WALL   3
+#define TETO   4
 uniform int object_id;
 
 // Parâmetros da axis-aligned bounding box (AABB) do modelo
@@ -129,9 +130,12 @@ void main()
     }
     else if ( object_id == PLANE )
     {
-        // Coordenadas de textura do plano, obtidas do arquivo OBJ.
         vec2 uv = texcoords * TextureRepeat;
         Kd0 = texture(TextureImage1, uv).rgb;
+    }
+    else if ( object_id == TETO ) {
+         vec2 uv = texcoords * TextureRepeat; 
+         Kd0 = texture(TextureImage2, uv).rgb; 
     }
     else if ( object_id == WALL )
     {

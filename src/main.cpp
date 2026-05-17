@@ -342,9 +342,9 @@ int main(int argc, char *argv[])
     //
     LoadShadersFromFiles();
 
-    // Carregamos duas imagens para serem utilizadas como textura
     LoadTextureImage(FindFile("data/parede.png").c_str());
     LoadTextureImage(FindFile("assets/sand.png").c_str());
+    LoadTextureImage(FindFile("assets/teto.png").c_str());
 
     // Construímos apenas o chão/grama.
     std::string plane_path = FindFile("data/plane.obj");
@@ -553,15 +553,33 @@ int main(int argc, char *argv[])
 
 #define PLANE 2
 #define WALL 3
+#define TETO 4
 
-        // Desenhamos o plano do chão
+        // Chão
         model = Matrix_Translate(0.0f, g_GroundY, 0.0f) * Matrix_Scale(10.0f, 1.0f, 10.0f);
+
         glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
         glUniform1i(g_object_id_uniform, PLANE);
-        // Repetições da textura no plano (tiling)
+
         if (g_texture_repeat_uniform != -1)
             glUniform1f(g_texture_repeat_uniform, 10.0f);
+
         DrawVirtualObject("the_plane");
+
+        // Teto
+        glDisable(GL_CULL_FACE);
+
+        model = Matrix_Translate(0.0f, g_GroundY + wallHeight, 0.0f) * Matrix_Rotate_X(3.1415926f) * Matrix_Scale(10.0f, 1.0f, 10.0f);
+
+        glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
+        glUniform1i(g_object_id_uniform, TETO);
+
+        if (g_texture_repeat_uniform != -1)
+            glUniform1f(g_texture_repeat_uniform, 10.0f);
+
+        DrawVirtualObject("the_plane");
+
+        glEnable(GL_CULL_FACE);
 
         // Draw maze walls (render double-sided and with low tiling)
         glUniform1i(g_object_id_uniform, WALL);

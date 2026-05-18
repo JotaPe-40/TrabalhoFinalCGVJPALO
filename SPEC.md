@@ -71,7 +71,7 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 
 ### Transformações geométricas controladas pelo usuário
 
-<mark>`o controle de movimentação em primeira pessoa confere transformações geométricas controladas pelo usuário/jogador`</mark>
+<mark>`o controle de movimentação vista de cima confere transformações geométricas controladas pelo usuário/jogador no boneco`</mark>
 
 ### Diferentes tipos de câmeras
 
@@ -79,7 +79,7 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 
 ### Instâncias de objetos
 
-<mark>`smile e ratos`</mark>
+<mark>`boneco steve do usuário, smile e ratos`</mark>
 
 ### Testes de intersecção
 
@@ -88,9 +88,9 @@ teste cubo-esfera entre o jogador e o smile, teste cubo-cubo entre o jogador e o
 
 ### Modelos de Iluminação em todos os objetos
 
-<mark>`a Iluminação do smile tera componente especular com shading gouraud, 
+<mark>`a Iluminação do smile tera componente especular com shading gouraud com fonte de luz própria, 
 as paredes terao componente especular com shading de phong, 
-o teto e o chao terão apenas componente difuso`</mark>
+o teto e o chao terão apenas componente difuso, a fonte de luz será uma lanterna na mão do boneco`</mark>
 
 ### Mapeamento de texturas em todos os objetos
 

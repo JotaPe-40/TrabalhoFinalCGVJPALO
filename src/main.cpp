@@ -249,6 +249,8 @@ GLint g_texture_repeat_uniform;
 // Número de texturas carregadas pela função LoadTextureImage()
 GLuint g_NumLoadedTextures = 0;
 
+bool g_OnlyBorderWalls = false;
+
 std::string FindFile(const std::string &path)
 {
     std::vector<std::string> prefixes = {
@@ -458,40 +460,55 @@ int main(int argc, char *argv[])
             glm::vec3 pmax = glm::vec3(testPos.x + g_PlayerHalfWidth, testPos.y + g_PlayerHalfHeight, testPos.z + g_PlayerHalfDepth);
 
             bool collided = false;
+
             for (int i = 0; i <= mazeH && !collided; i++)
             {
                 for (int j = 0; j < mazeW && !collided; j++)
                 {
                     if (wallHorz[i][j])
                     {
+                        if (g_OnlyBorderWalls && !(i == 0 || i == mazeH))
+                            continue;
+
                         float x = (j - mazeW / 2.0f + 0.5f) * cellSize;
                         float z = (i - mazeH / 2.0f) * cellSize;
+
                         float wall_xmin = x - cellSize / 2.0f;
                         float wall_xmax = x + cellSize / 2.0f;
+
                         bool overlapX = (pmin.x <= wall_xmax) && (pmax.x >= wall_xmin);
                         float dz = fabs(testPos.z - z);
+
                         if (overlapX && dz < (g_PlayerHalfDepth + eps))
                             collided = true;
                     }
                 }
             }
+
             for (int i = 0; i < mazeH && !collided; i++)
             {
                 for (int j = 0; j <= mazeW && !collided; j++)
                 {
                     if (wallVert[i][j])
                     {
+                        if (g_OnlyBorderWalls && !(j == 0 || j == mazeW))
+                            continue;
+
                         float x = (j - mazeW / 2.0f) * cellSize;
                         float z = (i - mazeH / 2.0f + 0.5f) * cellSize;
+
                         float wall_zmin = z - cellSize / 2.0f;
                         float wall_zmax = z + cellSize / 2.0f;
+
                         bool overlapZ = (pmin.z <= wall_zmax) && (pmax.z >= wall_zmin);
                         float dx = fabs(testPos.x - x);
+
                         if (overlapZ && dx < (g_PlayerHalfWidth + eps))
                             collided = true;
                     }
                 }
             }
+
             return collided;
         };
 
@@ -519,8 +536,8 @@ int main(int argc, char *argv[])
 
         // Note que, no sistema de coordenadas da câmera, os planos near e far
         // estão no sentido negativo! Veja slides 176-204 do documento Aula_09_Projecoes.pdf.
-        float nearplane = -0.1f; // Posição do "near plane"
-        float farplane = -10.0f; // Posição do "far plane"
+        float nearplane = -0.1f;  // Posição do "near plane"
+        float farplane = -100.0f; // Posição do "far plane"
 
         if (g_UsePerspectiveProjection)
         {
@@ -586,9 +603,12 @@ int main(int argc, char *argv[])
 
         // Draw maze walls (render double-sided and with low tiling)
         glUniform1i(g_object_id_uniform, WALL);
+
         if (g_texture_repeat_uniform != -1)
-            glUniform1f(g_texture_repeat_uniform, 1.0f);
+            glUniform1f(g_texture_repeat_uniform, 2.0f);
+
         glDisable(GL_CULL_FACE);
+
         // horizontal walls
         for (int i = 0; i <= mazeH; i++)
         {
@@ -596,14 +616,21 @@ int main(int argc, char *argv[])
             {
                 if (wallHorz[i][j])
                 {
+                    if (g_OnlyBorderWalls && !(i == 0 || i == mazeH))
+                        continue;
+
                     float x = (j - mazeW / 2.0f + 0.5f) * cellSize;
                     float z = (i - mazeH / 2.0f) * cellSize;
-                    glm::mat4 wm = Matrix_Translate(x, g_GroundY + wallHeight / 2.0f, z) * Matrix_Scale(cellSize, wallHeight, wallThickness);
+
+                    glm::mat4 wm =
+                        Matrix_Translate(x, g_GroundY + wallHeight / 2.0f, z) * Matrix_Scale(cellSize, wallHeight, wallThickness);
+
                     glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(wm));
                     DrawVirtualObject("wall_cube");
                 }
             }
         }
+
         // vertical walls
         for (int i = 0; i < mazeH; i++)
         {
@@ -611,19 +638,26 @@ int main(int argc, char *argv[])
             {
                 if (wallVert[i][j])
                 {
+                    if (g_OnlyBorderWalls && !(j == 0 || j == mazeW))
+                        continue;
+
                     float x = (j - mazeW / 2.0f) * cellSize;
                     float z = (i - mazeH / 2.0f + 0.5f) * cellSize;
-                    glm::mat4 wm = Matrix_Translate(x, g_GroundY + wallHeight / 2.0f, z) * Matrix_Scale(wallThickness, wallHeight, cellSize);
+
+                    glm::mat4 wm =
+                        Matrix_Translate(x, g_GroundY + wallHeight / 2.0f, z) * Matrix_Scale(wallThickness, wallHeight, cellSize);
+
                     glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(wm));
                     DrawVirtualObject("wall_cube");
                 }
             }
         }
+
         glEnable(GL_CULL_FACE);
+
         // restore plane tiling for next frame
         if (g_texture_repeat_uniform != -1)
             glUniform1f(g_texture_repeat_uniform, 10.0f);
-
         // O jogador agora é somente uma hitbox cúbica invisível para colisão.
 
         // Imprimimos na tela os ângulos de Euler que controlam a rotação do
@@ -1602,6 +1636,10 @@ void KeyCallback(GLFWwindow *window, int key, int scancode, int action, int mod)
         LoadShadersFromFiles();
         fprintf(stdout, "Shaders recarregados!\n");
         fflush(stdout);
+    }
+    if (key == GLFW_KEY_SPACE && action == GLFW_PRESS)
+    {
+        g_OnlyBorderWalls = !g_OnlyBorderWalls;
     }
 }
 

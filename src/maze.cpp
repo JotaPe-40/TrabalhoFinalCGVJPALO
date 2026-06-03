@@ -3,8 +3,8 @@
 #include <random>
 #include <ctime>
 
-const int mazeW = 20;
-const int mazeH = 20;
+const int mazeW = 7;
+const int mazeH = 7;
 const float cellSize = 1.5f;
 const float wallThickness = 0.01f;
 const float wallHeight = 1.0f;

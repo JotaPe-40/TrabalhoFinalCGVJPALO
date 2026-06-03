@@ -555,27 +555,30 @@ int main(int argc, char *argv[])
 #define WALL 3
 #define TETO 4
 
+        float mazeSizeX = mazeW * cellSize;
+        float mazeSizeZ = mazeH * cellSize;
+
         // Chão
-        model = Matrix_Translate(0.0f, g_GroundY, 0.0f) * Matrix_Scale(10.0f, 1.0f, 10.0f);
+        model = Matrix_Translate(0.0f, g_GroundY, 0.0f) * Matrix_Scale(mazeSizeX, 1.0f, mazeSizeZ);
 
         glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
         glUniform1i(g_object_id_uniform, PLANE);
 
         if (g_texture_repeat_uniform != -1)
-            glUniform1f(g_texture_repeat_uniform, 10.0f);
+            glUniform1f(g_texture_repeat_uniform, mazeW);
 
         DrawVirtualObject("the_plane");
 
         // Teto
         glDisable(GL_CULL_FACE);
 
-        model = Matrix_Translate(0.0f, g_GroundY + wallHeight, 0.0f) * Matrix_Rotate_X(3.1415926f) * Matrix_Scale(10.0f, 1.0f, 10.0f);
+        model = Matrix_Translate(0.0f, g_GroundY + wallHeight, 0.0f) * Matrix_Rotate_X(3.1415926f) * Matrix_Scale(mazeSizeX, 1.0f, mazeSizeZ);
 
         glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
         glUniform1i(g_object_id_uniform, TETO);
 
         if (g_texture_repeat_uniform != -1)
-            glUniform1f(g_texture_repeat_uniform, 10.0f);
+            glUniform1f(g_texture_repeat_uniform, mazeW);
 
         DrawVirtualObject("the_plane");
 

@@ -344,9 +344,10 @@ int main(int argc, char *argv[])
     //
     LoadShadersFromFiles();
 
-    LoadTextureImage(FindFile("data/parede.png").c_str());
-    LoadTextureImage(FindFile("assets/sand.png").c_str());
-    LoadTextureImage(FindFile("assets/teto.png").c_str());
+    LoadTextureImage(FindFile("data/parede.png").c_str());  // TextureImage0
+    LoadTextureImage(FindFile("assets/sand.png").c_str());  // TextureImage1
+    LoadTextureImage(FindFile("assets/teto.png").c_str());  // TextureImage2
+    LoadTextureImage(FindFile("assets/smile.png").c_str()); // TextureImage3
 
     // Construímos apenas o chão/grama.
     std::string plane_path = FindFile("data/plane.obj");
@@ -354,6 +355,13 @@ int main(int argc, char *argv[])
 
     ComputeNormals(&planemodel);
     BuildTrianglesAndAddToVirtualScene(&planemodel);
+
+    // Usa a esfera do trabalho base
+    std::string sphere_path = FindFile("data/sphere.obj");
+    ObjModel spheremodel(sphere_path.c_str());
+
+    ComputeNormals(&spheremodel);
+    BuildTrianglesAndAddToVirtualScene(&spheremodel);
 
     // Constrói o cubo usado para as paredes do labirinto
     BuildCubeAndAddToVirtualScene(1.0f, "wall_cube");
@@ -568,6 +576,7 @@ int main(int argc, char *argv[])
         glUniformMatrix4fv(g_view_uniform, 1, GL_FALSE, glm::value_ptr(view));
         glUniformMatrix4fv(g_projection_uniform, 1, GL_FALSE, glm::value_ptr(projection));
 
+#define SPHERE 0
 #define PLANE 2
 #define WALL 3
 #define TETO 4
@@ -585,6 +594,27 @@ int main(int argc, char *argv[])
             glUniform1f(g_texture_repeat_uniform, mazeW);
 
         DrawVirtualObject("the_plane");
+
+        // Esfera dentro do labirinto
+        int sphereRow = 2;
+        int sphereCol = 2;
+
+        float sphereX = (sphereCol - mazeW / 2.0f + 0.5f) * cellSize;
+        float sphereZ = (sphereRow - mazeH / 2.0f + 0.5f) * cellSize;
+
+        float sphereScale = 0.2f * cellSize;
+
+        model =
+            Matrix_Translate(
+                sphereX,
+                g_GroundY + 0.4f,
+                sphereZ) *
+            Matrix_Rotate_Y((float)glfwGetTime()) * Matrix_Scale(sphereScale, sphereScale, sphereScale);
+
+        glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
+        glUniform1i(g_object_id_uniform, SPHERE);
+
+        DrawVirtualObject("the_sphere");
 
         // Teto
         glDisable(GL_CULL_FACE);
@@ -949,6 +979,7 @@ void LoadShadersFromFiles()
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage0"), 0);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage1"), 1);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage2"), 2);
+    glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage3"), 3);
     g_texture_repeat_uniform = glGetUniformLocation(g_GpuProgramID, "TextureRepeat");
     glUseProgram(0);
 }

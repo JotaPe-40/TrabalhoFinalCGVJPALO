@@ -1070,7 +1070,12 @@ void BuildTrianglesAndAddToVirtualScene(ObjModel *model)
         size_t first_index = indices.size();
         size_t num_triangles = model->shapes[shape].mesh.num_face_vertices.size();
 
-        const float minval = std::numeric_limits<float>::min();
+        // Em 2026-05-18, corrigido bug encontrado pelo aluno Arthur Prediger:
+        // std::numeric_limits<float>::min() retorna o menor valor positivo
+        // normalizado representável, não o menor valor possível (negativo). Para
+        // inicializar o limite máximo da bounding box com um valor "muito
+        // pequeno", deve ser usado std::numeric_limits<float>::lowest()
+        const float minval = std::numeric_limits<float>::lowest();
         const float maxval = std::numeric_limits<float>::max();
 
         glm::vec3 bbox_min = glm::vec3(maxval, maxval, maxval);

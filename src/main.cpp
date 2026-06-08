@@ -250,6 +250,7 @@ GLint g_texture_repeat_uniform;
 GLuint g_NumLoadedTextures = 0;
 
 bool g_OnlyBorderWalls = false;
+bool g_TopView = false;
 
 std::string FindFile(const std::string &path)
 {
@@ -452,14 +453,28 @@ int main(int argc, char *argv[])
         glm::vec3 prevPos = g_PlayerPosition;
         glm::vec3 moveDelta = glm::vec3(0.0f, 0.0f, 0.0f);
 
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-            moveDelta += forward_xz * speed * dt;
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-            moveDelta -= forward_xz * speed * dt;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-            moveDelta -= glm::normalize(glm::vec3(right3.x, 0.0f, right3.z)) * speed * dt;
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-            moveDelta += glm::normalize(glm::vec3(right3.x, 0.0f, right3.z)) * speed * dt;
+        if (g_TopView)
+        {
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+                moveDelta.z -= speed * dt;
+            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+                moveDelta.z += speed * dt;
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+                moveDelta.x -= speed * dt;
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+                moveDelta.x += speed * dt;
+        }
+        else
+        {
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+                moveDelta += forward_xz * speed * dt;
+            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+                moveDelta -= forward_xz * speed * dt;
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+                moveDelta -= glm::normalize(glm::vec3(right3.x, 0.0f, right3.z)) * speed * dt;
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+                moveDelta += glm::normalize(glm::vec3(right3.x, 0.0f, right3.z)) * speed * dt;
+        }
 
         const float eps = 0.05f;
         auto collidesAt = [&](const glm::vec3 &testPos)
@@ -534,10 +549,45 @@ int main(int argc, char *argv[])
         g_PlayerPosition = ConstrainPlayerToGround(prevPos);
 
         // Camera position and view
-        glm::vec4 camera_position_c = glm::vec4(g_PlayerPosition.x, g_PlayerPosition.y + g_PlayerEyeHeight, g_PlayerPosition.z, 1.0f);
-        glm::vec4 camera_view_vector = glm::vec4(front3, 0.0f);
-        glm::vec4 camera_up_vector = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
-        glm::mat4 view = Matrix_Camera_View(camera_position_c, camera_view_vector, camera_up_vector);
+        glm::mat4 view;
+        if (g_TopView)
+        {
+            glm::vec4 camera_position_c =
+                glm::vec4(0.0f,
+                          wallHeight * 8.0f,
+                          0.0f,
+                          1.0f);
+
+            glm::vec4 camera_view_vector =
+                glm::vec4(0.0f, -1.0f, 0.0f, 0.0f);
+
+            glm::vec4 camera_up_vector =
+                glm::vec4(0.0f, 0.0f, -1.0f, 0.0f);
+
+            view = Matrix_Camera_View(
+                camera_position_c,
+                camera_view_vector,
+                camera_up_vector);
+        }
+        else
+        {
+            glm::vec4 camera_position_c =
+                glm::vec4(g_PlayerPosition.x,
+                          g_PlayerPosition.y + g_PlayerEyeHeight,
+                          g_PlayerPosition.z,
+                          1.0f);
+
+            glm::vec4 camera_view_vector =
+                glm::vec4(front3, 0.0f);
+
+            glm::vec4 camera_up_vector =
+                glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
+
+            view = Matrix_Camera_View(
+                camera_position_c,
+                camera_view_vector,
+                camera_up_vector);
+        }
 
         // Agora computamos a matriz de Projeção.
         glm::mat4 projection;
@@ -617,28 +667,32 @@ int main(int argc, char *argv[])
         DrawVirtualObject("the_sphere");
 
         // Teto
-        glDisable(GL_CULL_FACE);
+        if (!g_TopView)
+        {
+            glDisable(GL_CULL_FACE);
 
-        model = Matrix_Translate(0.0f, g_GroundY + wallHeight, 0.0f) * Matrix_Rotate_X(3.1415926f) * Matrix_Scale(mazeSizeX, 1.0f, mazeSizeZ);
+            model = Matrix_Translate(0.0f, g_GroundY + wallHeight, 0.0f) * Matrix_Rotate_X(3.1415926f) * Matrix_Scale(mazeSizeX, 1.0f, mazeSizeZ);
 
-        glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
-        glUniform1i(g_object_id_uniform, TETO);
+            glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
+            glUniform1i(g_object_id_uniform, TETO);
 
-        if (g_texture_repeat_uniform != -1)
-            glUniform1f(g_texture_repeat_uniform, mazeW);
+            if (g_texture_repeat_uniform != -1)
+                glUniform1f(g_texture_repeat_uniform, mazeW);
 
-        DrawVirtualObject("the_plane");
+            DrawVirtualObject("the_plane");
 
-        glEnable(GL_CULL_FACE);
+            glEnable(GL_CULL_FACE);
 
-        // Draw maze walls (render double-sided and with low tiling)
+            // Draw maze walls (render double-sided and with low tiling)
+            glUniform1i(g_object_id_uniform, WALL);
+
+            if (g_texture_repeat_uniform != -1)
+                glUniform1f(g_texture_repeat_uniform, 2.0f);
+
+            glDisable(GL_CULL_FACE);
+        }
+
         glUniform1i(g_object_id_uniform, WALL);
-
-        if (g_texture_repeat_uniform != -1)
-            glUniform1f(g_texture_repeat_uniform, 2.0f);
-
-        glDisable(GL_CULL_FACE);
-
         // horizontal walls
         for (int i = 0; i <= mazeH; i++)
         {
@@ -681,6 +735,24 @@ int main(int argc, char *argv[])
                     DrawVirtualObject("wall_cube");
                 }
             }
+        }
+
+        if (g_TopView)
+        {
+            float playerMarkerScale = 0.15f * cellSize;
+
+            model =
+                Matrix_Translate(g_PlayerPosition.x,
+                                 g_GroundY + 0.4f,
+                                 g_PlayerPosition.z) *
+                Matrix_Scale(playerMarkerScale,
+                             playerMarkerScale,
+                             playerMarkerScale);
+
+            glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
+            glUniform1i(g_object_id_uniform, SPHERE);
+
+            DrawVirtualObject("the_sphere");
         }
 
         glEnable(GL_CULL_FACE);
@@ -1603,6 +1675,10 @@ void KeyCallback(GLFWwindow *window, int key, int scancode, int action, int mod)
     Correcao_KeyCallback(key, action, mod);
     // =======================
 
+    if (key == GLFW_KEY_TAB && action == GLFW_PRESS)
+    {
+        g_TopView = !g_TopView;
+    }
     // Se o usuário pressionar a tecla ESC, fechamos a janela.
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
         glfwSetWindowShouldClose(window, GL_TRUE);

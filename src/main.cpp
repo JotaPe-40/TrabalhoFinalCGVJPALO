@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 // Headers abaixo são específicos de C++
 #include <set>
@@ -113,6 +114,21 @@ struct ObjModel
     }
 };
 
+// Estrutura com os dados de um ratinho que se movimenta aleatoriamente pelo
+// labirinto, seguindo uma curva de Bézier cúbica entre pontos sorteados.
+// Definida aqui (antes dos protótipos abaixo) pois é usada como parâmetro
+// em algumas das funções declaradas a seguir.
+struct Rat
+{
+    // Pontos de controle da curva de Bézier cúbica que define o trecho de
+    // movimento atual (em coordenadas de mundo, no plano XZ; Y é fixo no chão).
+    glm::vec3 p0, p1, p2, p3;
+    float t;             // parâmetro [0,1] dentro do trecho atual da curva
+    float duration;      // duração (segundos) do trecho atual (independente de FPS)
+    glm::vec3 position;  // posição atual (cache, atualizada em UpdateRats)
+    float yaw;           // orientação para desenhar o modelo virado para onde anda
+};
+
 // Declaração de funções utilizadas para pilha de matrizes de modelagem.
 void PushMatrix(glm::mat4 M);
 void PopMatrix(glm::mat4 &M);
@@ -131,6 +147,20 @@ GLuint LoadShader_Fragment(const char *filename);                            // 
 void LoadShader(const char *filename, GLuint shader_id);                     // Função utilizada pelas duas acima
 GLuint CreateGpuProgram(GLuint vertex_shader_id, GLuint fragment_shader_id); // Cria um programa de GPU
 void PrintObjModelInfo(ObjModel *);                                          // Função para debugging
+
+// NOSSAS FUNÇÕES: ratos, colisão jogador-smile e tela de fim de jogo.
+glm::vec3 ComputeSmilePosition();                                   // Posição (mundo) do centro do smile na célula configurada
+void SpawnRats();                                                   // Cria/recria os ratinhos em posições aleatórias válidas
+glm::vec3 RandomPointInsideMaze(std::mt19937 &rng);                 // Sorteia um ponto de mundo dentro do labirinto
+void PickNewBezierLeg(Rat &rat, std::mt19937 &rng);                 // Sorteia um novo trecho de curva de Bézier para um rato
+void UpdateRats(float dt);                                          // Avança a simulação de todos os ratos em dt segundos
+bool SphereAabbIntersect(glm::vec3 sphereCenter, float sphereRadius,
+                          glm::vec3 boxCenter, glm::vec3 halfExtents); // Teste de intersecção cubo-esfera
+bool AabbAabbIntersect(glm::vec3 centerA, glm::vec3 halfA,
+                        glm::vec3 centerB, glm::vec3 halfB);           // Teste de intersecção cubo-cubo
+void ResetGame(GLFWwindow *window);                                  // Reinicia labirinto, jogador, ratos e cronômetro
+void DrawGameOverScreen(GLFWwindow *window, double elapsedSeconds); // Desenha overlay de fim de jogo + botão "jogar novamente"
+void DrawColoredQuad2D(float x0, float y0, float x1, float y1, float r, float g, float b, float a); // Desenha um quad 2D colorido (para o botão)
 
 // Declaração de funções auxiliares para renderizar texto dentro da janela
 // OpenGL. Estas funções estão definidas no arquivo "textrendering.cpp".
@@ -213,9 +243,13 @@ float g_PlayerYaw = 3.1415926f; // Facing -Z by default
 float g_PlayerPitch = 0.0f;
 float g_PlayerSpeed = 3.0f; // units per second
 float g_PlayerEyeHeight = 0.6f;
-float g_PlayerHalfWidth = 0.25f;
-float g_PlayerHalfHeight = 0.50f;
-float g_PlayerHalfDepth = 0.25f;
+// Hitbox do jogador: um CUBO (mesma semi-extensão nos três eixos X, Y e Z).
+// O valor de "g_PlayerHalfHeight" é usado em dobro como a altura total do
+// cubo (do chão até o topo da cabeça), e as semi-larguras em X/Z usam o
+// mesmo valor para fechar o cubo.
+float g_PlayerHalfWidth = 0.30f;
+float g_PlayerHalfHeight = 0.30f;
+float g_PlayerHalfDepth = 0.30f;
 bool g_FpsMode = true; // enable FPS camera and controls
 bool g_FirstMouse = true;
 // Last cursor positions (used by mouse callbacks and FPS init)
@@ -236,6 +270,43 @@ bool g_UsePerspectiveProjection = true;
 // Variável que controla se o texto informativo será mostrado na tela.
 bool g_ShowInfoText = true;
 
+// ===========================================================================
+// Smile (objetivo do jogador). Hitbox: ESFERA.
+// ===========================================================================
+int g_SphereRow = 2;
+int g_SphereCol = 2;
+glm::vec3 g_SmileCenter = glm::vec3(0.0f, 0.0f, 0.0f); // recomputado a cada frame
+float g_SmileRadius = 0.0f;                            // recomputado a cada frame, em unidades de mundo
+
+// ===========================================================================
+// Ratinhos: vários, espalhados pelo labirinto, movendo-se aleatoriamente.
+// Hitbox: QUADRADO (AABB com mesma semi-largura em X e Z), colidindo
+// apenas com as paredes do labirinto (por enquanto).
+// ===========================================================================
+std::vector<Rat> g_Rats;
+const float g_RatHalfSize = 0.18f;   // hitbox quadrada (mesma semi-largura em X e Z)
+const float g_RatScale = 0.0046f;    // escala do modelo 3D (rat.obj) para ~0.45 unidades de comprimento
+const int g_NumRats = 6;
+
+// ===========================================================================
+// Estado de jogo / cronômetro / tela de fim de jogo
+// ===========================================================================
+enum GameState
+{
+    GAME_PLAYING = 0,
+    GAME_OVER = 1
+};
+GameState g_GameState = GAME_PLAYING;
+double g_GameStartTime = 0.0;   // glfwGetTime() no início da partida atual
+double g_GameOverElapsed = 0.0; // tempo total decorrido, congelado no momento do game over
+
+// Área (em coordenadas de tela, NDC: x em [-1,1], y em [-1,1]) do botão
+// "Jogar novamente" mostrado na tela de fim de jogo. Calculada em
+// DrawGameOverScreen() e usada em MouseButtonCallback() para detectar clique.
+float g_RestartButtonMinX = 0.0f, g_RestartButtonMaxX = 0.0f;
+float g_RestartButtonMinY = 0.0f, g_RestartButtonMaxY = 0.0f;
+bool g_RestartButtonValid = false;
+
 // Variáveis que definem um programa de GPU (shaders). Veja função LoadShadersFromFiles().
 GLuint g_GpuProgramID = 0;
 GLint g_model_uniform;
@@ -249,8 +320,8 @@ GLint g_texture_repeat_uniform;
 // Número de texturas carregadas pela função LoadTextureImage()
 GLuint g_NumLoadedTextures = 0;
 
-bool g_OnlyBorderWalls = false;
 bool g_TopView = false;
+
 
 std::string FindFile(const std::string &path)
 {
@@ -345,10 +416,11 @@ int main(int argc, char *argv[])
     //
     LoadShadersFromFiles();
 
-    LoadTextureImage(FindFile("data/parede.png").c_str());  // TextureImage0
-    LoadTextureImage(FindFile("assets/sand.png").c_str());  // TextureImage1
-    LoadTextureImage(FindFile("assets/teto.png").c_str());  // TextureImage2
-    LoadTextureImage(FindFile("assets/smile.png").c_str()); // TextureImage3
+    LoadTextureImage(FindFile("data/parede.png").c_str());   // TextureImage0
+    LoadTextureImage(FindFile("assets/sand.png").c_str());   // TextureImage1
+    LoadTextureImage(FindFile("assets/teto.png").c_str());   // TextureImage2
+    LoadTextureImage(FindFile("assets/smile.png").c_str());  // TextureImage3
+    LoadTextureImage(FindFile("assets/fur.png").c_str());     // TextureImage4
 
     // Construímos apenas o chão/grama.
     std::string plane_path = FindFile("data/plane.obj");
@@ -366,6 +438,15 @@ int main(int argc, char *argv[])
 
     // Constrói o cubo usado para as paredes do labirinto
     BuildCubeAndAddToVirtualScene(1.0f, "wall_cube");
+
+    // Carrega o modelo 3D do ratinho (convertido de assets/rat.stl para
+    // data/rat.obj, com eixos já remapeados para a convenção do motor:
+    // Y para cima e a cabeça apontando para -Z).
+    std::string rat_path = FindFile("data/rat.obj");
+    ObjModel ratmodel(rat_path.c_str());
+
+    ComputeNormals(&ratmodel);
+    BuildTrianglesAndAddToVirtualScene(&ratmodel);
 
     if (argc > 1)
     {
@@ -403,6 +484,10 @@ int main(int argc, char *argv[])
         (sc - mazeW / 2.0f + 0.5f) * cellSize,
         g_GroundY,
         (sr - mazeH / 2.0f + 0.5f) * cellSize);
+
+    SpawnRats();
+    g_GameState = GAME_PLAYING;
+    g_GameStartTime = lastTime;
 
     // Ficamos em um loop infinito, renderizando, até que o usuário feche a janela
     while (!glfwWindowShouldClose(window))
@@ -453,18 +538,15 @@ int main(int argc, char *argv[])
         glm::vec3 prevPos = g_PlayerPosition;
         glm::vec3 moveDelta = glm::vec3(0.0f, 0.0f, 0.0f);
 
-        if (g_TopView)
-        {
-            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-                moveDelta.z -= speed * dt;
-            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-                moveDelta.z += speed * dt;
-            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-                moveDelta.x -= speed * dt;
-            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-                moveDelta.x += speed * dt;
-        }
-        else
+        // Quando o jogo termina (jogador encostou no smile), o movimento do
+        // jogador é congelado: nenhuma tecla de movimento tem efeito. O
+        // mesmo vale para a visão de cima (TAB): ela troca apenas a câmera
+        // por uma câmera de espectador fixa olhando para baixo; o jogador
+        // (seu "boneco"/hitbox) permanece exatamente onde estava, sem se
+        // mover, enquanto essa visão estiver ativa.
+        bool inputEnabled = (g_GameState == GAME_PLAYING) && !g_TopView;
+
+        if (inputEnabled)
         {
             if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
                 moveDelta += forward_xz * speed * dt;
@@ -476,63 +558,11 @@ int main(int argc, char *argv[])
                 moveDelta += glm::normalize(glm::vec3(right3.x, 0.0f, right3.z)) * speed * dt;
         }
 
-        const float eps = 0.05f;
+        // Testa colisão do jogador (hitbox cúbica) contra as paredes do
+        // labirinto, reaproveitando a mesma função usada pelos ratos.
         auto collidesAt = [&](const glm::vec3 &testPos)
         {
-            glm::vec3 pmin = glm::vec3(testPos.x - g_PlayerHalfWidth, testPos.y, testPos.z - g_PlayerHalfDepth);
-            glm::vec3 pmax = glm::vec3(testPos.x + g_PlayerHalfWidth, testPos.y + g_PlayerHalfHeight, testPos.z + g_PlayerHalfDepth);
-
-            bool collided = false;
-
-            for (int i = 0; i <= mazeH && !collided; i++)
-            {
-                for (int j = 0; j < mazeW && !collided; j++)
-                {
-                    if (wallHorz[i][j])
-                    {
-                        if (g_OnlyBorderWalls && !(i == 0 || i == mazeH))
-                            continue;
-
-                        float x = (j - mazeW / 2.0f + 0.5f) * cellSize;
-                        float z = (i - mazeH / 2.0f) * cellSize;
-
-                        float wall_xmin = x - cellSize / 2.0f;
-                        float wall_xmax = x + cellSize / 2.0f;
-
-                        bool overlapX = (pmin.x <= wall_xmax) && (pmax.x >= wall_xmin);
-                        float dz = fabs(testPos.z - z);
-
-                        if (overlapX && dz < (g_PlayerHalfDepth + eps))
-                            collided = true;
-                    }
-                }
-            }
-
-            for (int i = 0; i < mazeH && !collided; i++)
-            {
-                for (int j = 0; j <= mazeW && !collided; j++)
-                {
-                    if (wallVert[i][j])
-                    {
-                        if (g_OnlyBorderWalls && !(j == 0 || j == mazeW))
-                            continue;
-
-                        float x = (j - mazeW / 2.0f) * cellSize;
-                        float z = (i - mazeH / 2.0f + 0.5f) * cellSize;
-
-                        float wall_zmin = z - cellSize / 2.0f;
-                        float wall_zmax = z + cellSize / 2.0f;
-
-                        bool overlapZ = (pmin.z <= wall_zmax) && (pmax.z >= wall_zmin);
-                        float dx = fabs(testPos.x - x);
-
-                        if (overlapZ && dx < (g_PlayerHalfWidth + eps))
-                            collided = true;
-                    }
-                }
-            }
-
-            return collided;
+            return MazeCollides(testPos.x, testPos.z, g_PlayerHalfWidth, g_PlayerHalfDepth);
         };
 
         // Axis sliding: resolve X then Z so player can slide along walls.
@@ -547,6 +577,32 @@ int main(int argc, char *argv[])
             prevPos.z = tryPos.z;
 
         g_PlayerPosition = ConstrainPlayerToGround(prevPos);
+
+        // Atualiza a simulação dos ratinhos (movimento aleatório via Bézier)
+        // e testa a colisão cubo-esfera entre o jogador e o smile. Ambas as
+        // verificações só acontecem enquanto o jogo está em andamento.
+        if (g_GameState == GAME_PLAYING)
+        {
+            UpdateRats(dt);
+
+            glm::vec3 playerBoxCenter = glm::vec3(
+                g_PlayerPosition.x,
+                g_PlayerPosition.y + g_PlayerHalfHeight,
+                g_PlayerPosition.z);
+            glm::vec3 playerHalfExtents = glm::vec3(g_PlayerHalfWidth, g_PlayerHalfHeight, g_PlayerHalfDepth);
+
+            if (SphereAabbIntersect(g_SmileCenter, g_SmileRadius, playerBoxCenter, playerHalfExtents))
+            {
+                g_GameState = GAME_OVER;
+                g_GameOverElapsed = currentTime - g_GameStartTime;
+
+                // Libera o cursor do mouse (estava capturado pelo modo FPS)
+                // para que o jogador consiga mover o mouse até o botão
+                // "Jogar novamente" e clicar nele.
+                if (g_FpsMode)
+                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            }
+        }
 
         // Camera position and view
         glm::mat4 view;
@@ -630,6 +686,7 @@ int main(int argc, char *argv[])
 #define PLANE 2
 #define WALL 3
 #define TETO 4
+#define RAT 5
 
         float mazeSizeX = mazeW * cellSize;
         float mazeSizeZ = mazeH * cellSize;
@@ -645,14 +702,18 @@ int main(int argc, char *argv[])
 
         DrawVirtualObject("the_plane");
 
-        // Esfera dentro do labirinto
-        int sphereRow = 2;
-        int sphereCol = 2;
-
-        float sphereX = (sphereCol - mazeW / 2.0f + 0.5f) * cellSize;
-        float sphereZ = (sphereRow - mazeH / 2.0f + 0.5f) * cellSize;
+        // Esfera dentro do labirinto (objetivo do jogador). A hitbox desta
+        // esfera é usada para a colisão jogador-smile (cubo-esfera).
+        float sphereX = (g_SphereCol - mazeW / 2.0f + 0.5f) * cellSize;
+        float sphereZ = (g_SphereRow - mazeH / 2.0f + 0.5f) * cellSize;
 
         float sphereScale = 0.2f * cellSize;
+
+        // A malha "the_sphere" (data/sphere.obj) tem raio unitário (1.0) no
+        // espaço do modelo, logo o raio em coordenadas de mundo é igual ao
+        // fator de escala uniforme aplicado abaixo.
+        g_SmileCenter = glm::vec3(sphereX, g_GroundY + 0.4f, sphereZ);
+        g_SmileRadius = sphereScale;
 
         model =
             Matrix_Translate(
@@ -737,6 +798,24 @@ int main(int argc, char *argv[])
             }
         }
 
+        // Ratinhos: desenhamos cada um na sua posição/orientação atual.
+        glUniform1i(g_object_id_uniform, RAT);
+        if (g_texture_repeat_uniform != -1)
+            glUniform1f(g_texture_repeat_uniform, 1.0f);
+
+        for (size_t r = 0; r < g_Rats.size(); r++)
+        {
+            const Rat &rat = g_Rats[r];
+
+            model =
+                Matrix_Translate(rat.position.x, g_GroundY, rat.position.z) *
+                Matrix_Rotate_Y(rat.yaw) *
+                Matrix_Scale(g_RatScale, g_RatScale, g_RatScale);
+
+            glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
+            DrawVirtualObject("the_rat");
+        }
+
         if (g_TopView)
         {
             float playerMarkerScale = 0.15f * cellSize;
@@ -772,6 +851,13 @@ int main(int argc, char *argv[])
         // Imprimimos na tela informação sobre o número de quadros renderizados
         // por segundo (frames per second).
         TextRendering_ShowFramesPerSecond(window);
+
+        // Se o jogador encostou no smile, mostramos a tela de fim de jogo
+        // (tempo de conclusão + botão "Jogar novamente") por cima de tudo.
+        if (g_GameState == GAME_OVER)
+        {
+            DrawGameOverScreen(window, g_GameOverElapsed);
+        }
 
         // O framebuffer onde OpenGL executa as operações de renderização não
         // é o mesmo que está sendo mostrado para o usuário, caso contrário
@@ -1052,6 +1138,7 @@ void LoadShadersFromFiles()
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage1"), 1);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage2"), 2);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage3"), 3);
+    glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage4"), 4);
     g_texture_repeat_uniform = glGetUniformLocation(g_GpuProgramID, "TextureRepeat");
     glUseProgram(0);
 }
@@ -1350,6 +1437,413 @@ glm::vec3 ConstrainPlayerToGround(glm::vec3 candidate_position)
     return candidate_position;
 }
 
+// ===========================================================================
+// NOSSAS FUNÇÕES: ratinhos, colisão jogador-smile e tela de fim de jogo.
+// ===========================================================================
+
+// Gerador de números aleatórios global, usado para o spawn e o movimento dos
+// ratinhos. Semeado uma única vez com a hora atual.
+static std::mt19937 g_RatRng((unsigned int)std::time(nullptr));
+
+// Retorna a posição (mundo) do centro da esfera "smile", consistente com a
+// posição usada no laço de renderização em main().
+glm::vec3 ComputeSmilePosition()
+{
+    float sphereX = (g_SphereCol - mazeW / 2.0f + 0.5f) * cellSize;
+    float sphereZ = (g_SphereRow - mazeH / 2.0f + 0.5f) * cellSize;
+    return glm::vec3(sphereX, g_GroundY + 0.4f, sphereZ);
+}
+
+// Sorteia um ponto de mundo dentro dos limites do labirinto (não necessariamente
+// livre de paredes -- a validação de colisão é feita por quem chama).
+glm::vec3 RandomPointInsideMaze(std::mt19937 &rng)
+{
+    float margin = 0.3f; // mantém o ponto longe das bordas externas
+    float halfX = (mazeW * cellSize) / 2.0f - margin;
+    float halfZ = (mazeH * cellSize) / 2.0f - margin;
+
+    std::uniform_real_distribution<float> distX(-halfX, halfX);
+    std::uniform_real_distribution<float> distZ(-halfZ, halfZ);
+
+    return glm::vec3(distX(rng), g_GroundY, distZ(rng));
+}
+
+// Sorteia um novo trecho de curva de Bézier cúbica para um rato: o ponto de
+// partida (p0) é a posição atual do rato, e os demais pontos de controle
+// (p1, p2, p3) são sorteados dentro do labirinto, repetindo o sorteio do
+// ponto final (p3) caso ele caia em cima de uma parede (testado com a mesma
+// hitbox quadrada usada para a colisão do próprio rato).
+void PickNewBezierLeg(Rat &rat, std::mt19937 &rng)
+{
+    rat.p0 = rat.position;
+
+    glm::vec3 target = rat.position;
+    const int maxAttempts = 30;
+    for (int attempt = 0; attempt < maxAttempts; attempt++)
+    {
+        glm::vec3 candidate = RandomPointInsideMaze(rng);
+        if (!MazeCollides(candidate.x, candidate.z, g_RatHalfSize, g_RatHalfSize))
+        {
+            target = candidate;
+            break;
+        }
+    }
+
+    // Pontos de controle intermediários: interpolados entre início e fim,
+    // com um deslocamento lateral aleatório, dando uma trajetória curva (em
+    // vez de uma linha reta) ao ratinho.
+    glm::vec3 dir = target - rat.p0;
+    glm::vec3 perp = glm::vec3(-dir.z, 0.0f, dir.x); // perpendicular no plano XZ
+    float perpLen = glm::length(perp);
+    if (perpLen > 1e-5f)
+        perp /= perpLen;
+
+    std::uniform_real_distribution<float> lateralDist(-0.4f, 0.4f);
+    float lateral = lateralDist(rng);
+
+    rat.p1 = rat.p0 + dir * 0.33f + perp * lateral;
+    rat.p2 = rat.p0 + dir * 0.66f + perp * lateral;
+    rat.p3 = target;
+
+    // Mantém todos os pontos de controle no plano do chão (Y constante).
+    rat.p0.y = rat.p1.y = rat.p2.y = rat.p3.y = g_GroundY;
+
+    rat.t = 0.0f;
+
+    std::uniform_real_distribution<float> durationDist(1.5f, 3.5f);
+    rat.duration = durationDist(rng);
+}
+
+// Cria (ou recria) os ratinhos do labirinto em posições aleatórias válidas
+// (fora das paredes), cada um já com seu primeiro trecho de Bézier sorteado.
+void SpawnRats()
+{
+    g_Rats.clear();
+    g_Rats.reserve(g_NumRats);
+
+    for (int i = 0; i < g_NumRats; i++)
+    {
+        Rat rat;
+
+        // Sorteia uma posição inicial que não colida com paredes.
+        glm::vec3 start = RandomPointInsideMaze(g_RatRng);
+        const int maxAttempts = 50;
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            glm::vec3 candidate = RandomPointInsideMaze(g_RatRng);
+            if (!MazeCollides(candidate.x, candidate.z, g_RatHalfSize, g_RatHalfSize))
+            {
+                start = candidate;
+                break;
+            }
+        }
+
+        rat.position = start;
+        rat.yaw = 0.0f;
+        PickNewBezierLeg(rat, g_RatRng); // usa rat.position como p0 e sorteia o resto
+
+        g_Rats.push_back(rat);
+    }
+}
+
+// Avalia um ponto sobre a curva de Bézier cúbica definida pelos pontos de
+// controle p0..p3, no parâmetro t em [0,1].
+static glm::vec3 EvalCubicBezier(const glm::vec3 &p0, const glm::vec3 &p1,
+                                  const glm::vec3 &p2, const glm::vec3 &p3, float t)
+{
+    float u = 1.0f - t;
+    return u * u * u * p0 +
+           3.0f * u * u * t * p1 +
+           3.0f * u * t * t * p2 +
+           t * t * t * p3;
+}
+
+// Avança a simulação de todos os ratinhos em dt segundos: cada rato anda ao
+// longo do trecho de Bézier atual; ao terminar o trecho, um novo é sorteado.
+// A movimentação resultante é então validada contra a colisão com as paredes
+// do labirinto (hitbox quadrada); se a nova posição colidiria com uma parede,
+// o rato simplesmente sorteia um novo destino imediatamente (na prática isso
+// quase não ocorre, já que os próprios pontos de controle já são validados
+// em PickNewBezierLeg, mas mantemos a checagem por robustez/segurança).
+void UpdateRats(float dt)
+{
+    for (Rat &rat : g_Rats)
+    {
+        if (rat.duration <= 0.0f)
+        {
+            PickNewBezierLeg(rat, g_RatRng);
+            continue;
+        }
+
+        float prevT = rat.t;
+        rat.t += dt / rat.duration;
+
+        if (rat.t >= 1.0f)
+        {
+            rat.position = rat.p3;
+            PickNewBezierLeg(rat, g_RatRng);
+            continue;
+        }
+
+        glm::vec3 newPos = EvalCubicBezier(rat.p0, rat.p1, rat.p2, rat.p3, rat.t);
+        newPos.y = g_GroundY;
+
+        // Colisão do rato apenas com as paredes do labirinto (hitbox quadrada).
+        if (MazeCollides(newPos.x, newPos.z, g_RatHalfSize, g_RatHalfSize))
+        {
+            // Trecho atual ficou inválido (não deveria acontecer na prática):
+            // aborta o trecho e sorteia outro a partir da posição anterior.
+            PickNewBezierLeg(rat, g_RatRng);
+            continue;
+        }
+
+        // Atualiza a orientação (yaw) do rato para ele "olhar" para onde anda.
+        glm::vec3 delta = newPos - rat.position;
+        if (glm::length(glm::vec2(delta.x, delta.z)) > 1e-5f)
+            rat.yaw = atan2f(delta.x, delta.z);
+
+        rat.position = newPos;
+        (void)prevT;
+    }
+}
+
+// Teste de intersecção entre uma esfera (centro + raio) e uma caixa alinhada
+// aos eixos (AABB, centro + semi-extensões): usa a técnica clássica de
+// encontrar o ponto da AABB mais próximo do centro da esfera e comparar a
+// distância (ao quadrado) com o raio (ao quadrado) da esfera.
+bool SphereAabbIntersect(glm::vec3 sphereCenter, float sphereRadius,
+                          glm::vec3 boxCenter, glm::vec3 halfExtents)
+{
+    glm::vec3 boxMin = boxCenter - halfExtents;
+    glm::vec3 boxMax = boxCenter + halfExtents;
+
+    glm::vec3 closest = glm::clamp(sphereCenter, boxMin, boxMax);
+    glm::vec3 diff = sphereCenter - closest;
+
+    float distSq = glm::dot(diff, diff);
+    return distSq <= (sphereRadius * sphereRadius);
+}
+
+// Teste de intersecção entre duas caixas alinhadas aos eixos (AABB-AABB),
+// cada uma definida por centro + semi-extensões. Não está em uso pela lógica
+// de jogo atual (ratos colidem apenas com paredes, por ora), mas fica
+// disponível para uma futura colisão jogador-rato ou rato-rato.
+bool AabbAabbIntersect(glm::vec3 centerA, glm::vec3 halfA,
+                        glm::vec3 centerB, glm::vec3 halfB)
+{
+    glm::vec3 minA = centerA - halfA, maxA = centerA + halfA;
+    glm::vec3 minB = centerB - halfB, maxB = centerB + halfB;
+
+    return (minA.x <= maxB.x && maxA.x >= minB.x) &&
+           (minA.y <= maxB.y && maxA.y >= minB.y) &&
+           (minA.z <= maxB.z && maxA.z >= minB.z);
+}
+
+// Reinicia uma nova partida: gera um novo labirinto, reposiciona o jogador
+// na célula inicial, recria os ratinhos e zera o cronômetro. Chamada quando
+// o jogador clica/pressiona "Jogar novamente" na tela de fim de jogo.
+void ResetGame(GLFWwindow *window)
+{
+    GenerateMaze();
+
+    int sr = 0;
+    int sc = 0;
+    g_PlayerPosition = glm::vec3(
+        (sc - mazeW / 2.0f + 0.5f) * cellSize,
+        g_GroundY,
+        (sr - mazeH / 2.0f + 0.5f) * cellSize);
+    g_PlayerYaw = 3.1415926f;
+    g_PlayerPitch = 0.0f;
+
+    SpawnRats();
+
+    g_GameState = GAME_PLAYING;
+    g_GameStartTime = glfwGetTime();
+    g_GameOverElapsed = 0.0;
+    g_RestartButtonValid = false;
+
+    (void)window;
+}
+
+// ---------------------------------------------------------------------------
+// Desenho de um quad 2D colorido (usado para o botão "Jogar novamente" e
+// para o painel de fundo da tela de fim de jogo). Implementado com um
+// programa de GPU próprio e bem simples (posição 2D em NDC + cor sólida),
+// seguindo o mesmo padrão usado por TextRendering_Init() em textrendering.cpp
+// para não interferir no shader principal da cena 3D.
+// ---------------------------------------------------------------------------
+static GLuint g_QuadVAO = 0;
+static GLuint g_QuadVBO = 0;
+static GLuint g_QuadProgramID = 0;
+static GLint g_QuadColorUniform = -1;
+static bool g_QuadInitialized = false;
+
+static const char *g_QuadVertexShaderSource =
+    "#version 330 core\n"
+    "layout (location = 0) in vec2 position;\n"
+    "void main() {\n"
+    "    gl_Position = vec4(position, 0.0, 1.0);\n"
+    "}\n";
+
+static const char *g_QuadFragmentShaderSource =
+    "#version 330 core\n"
+    "uniform vec4 quadColor;\n"
+    "out vec4 color;\n"
+    "void main() {\n"
+    "    color = quadColor;\n"
+    "}\n";
+
+static void InitColoredQuad()
+{
+    if (g_QuadInitialized)
+        return;
+
+    GLuint vertex_shader_id = glCreateShader(GL_VERTEX_SHADER);
+    const GLchar *vsrc = g_QuadVertexShaderSource;
+    GLint vlen = (GLint)strlen(g_QuadVertexShaderSource);
+    glShaderSource(vertex_shader_id, 1, &vsrc, &vlen);
+    glCompileShader(vertex_shader_id);
+
+    GLuint fragment_shader_id = glCreateShader(GL_FRAGMENT_SHADER);
+    const GLchar *fsrc = g_QuadFragmentShaderSource;
+    GLint flen = (GLint)strlen(g_QuadFragmentShaderSource);
+    glShaderSource(fragment_shader_id, 1, &fsrc, &flen);
+    glCompileShader(fragment_shader_id);
+
+    g_QuadProgramID = glCreateProgram();
+    glAttachShader(g_QuadProgramID, vertex_shader_id);
+    glAttachShader(g_QuadProgramID, fragment_shader_id);
+    glLinkProgram(g_QuadProgramID);
+
+    glDeleteShader(vertex_shader_id);
+    glDeleteShader(fragment_shader_id);
+
+    g_QuadColorUniform = glGetUniformLocation(g_QuadProgramID, "quadColor");
+
+    glGenVertexArrays(1, &g_QuadVAO);
+    glGenBuffers(1, &g_QuadVBO);
+
+    glBindVertexArray(g_QuadVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, g_QuadVBO);
+    glBufferData(GL_ARRAY_BUFFER, 12 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+
+    g_QuadInitialized = true;
+}
+
+// Desenha um retângulo 2D preenchido, em coordenadas de tela normalizadas
+// (NDC: x e y entre -1 e 1), com a cor RGBA informada.
+void DrawColoredQuad2D(float x0, float y0, float x1, float y1, float r, float g, float b, float a)
+{
+    InitColoredQuad();
+
+    float vertices[12] = {
+        x0, y0,
+        x1, y0,
+        x1, y1,
+
+        x0, y0,
+        x1, y1,
+        x0, y1};
+
+    glUseProgram(g_QuadProgramID);
+    glUniform4f(g_QuadColorUniform, r, g, b, a);
+
+    glBindVertexArray(g_QuadVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, g_QuadVBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+    glUseProgram(0);
+}
+
+// Desenha a tela de fim de jogo: um painel semitransparente cobrindo a tela,
+// o texto "FIM DE JOGO" com o tempo total decorrido, e um botão "Jogar
+// novamente" (quad colorido + texto) cuja área é guardada nas variáveis
+// globais g_RestartButton* para que MouseButtonCallback() detecte cliques.
+void DrawGameOverScreen(GLFWwindow *window, double elapsedSeconds)
+{
+    // Painel de fundo semitransparente sobre toda a tela.
+    DrawColoredQuad2D(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.65f);
+
+    // Painel sólido (opaco) atrás do bloco de título+subtítulo, garantindo
+    // legibilidade total do texto independente da textura da parede/teto
+    // que esteja por trás na cena 3D.
+    DrawColoredQuad2D(-0.62f, 0.0f, 0.62f, 0.34f, 0.05f, 0.05f, 0.05f, 0.92f);
+
+    int totalSeconds = (int)(elapsedSeconds + 0.5);
+    int minutes = totalSeconds / 60;
+    int seconds = totalSeconds % 60;
+
+    char timeBuffer[64];
+    snprintf(timeBuffer, sizeof(timeBuffer), "%02d:%02d", minutes, seconds);
+
+    std::string title = "FIM DE JOGO!";
+    std::string subtitle = "Voce encontrou o smile em " + std::string(timeBuffer);
+    std::string buttonLabel = "Jogar novamente";
+
+    // Título e subtítulo, centralizados aproximadamente pela contagem de
+    // caracteres (o sistema de fontes usado não expõe largura total da
+    // string de antemão, então usamos uma estimativa simples).
+    float titleScale = 3.0f;
+    float subtitleScale = 1.6f;
+
+    float titleX = -0.30f;
+    float titleY = 0.25f;
+    TextRendering_PrintString(window, title, titleX, titleY, titleScale);
+
+    float subtitleX = -0.34f;
+    float subtitleY = 0.05f;
+    TextRendering_PrintString(window, subtitle, subtitleX, subtitleY, subtitleScale);
+
+    // Botão "Jogar novamente": um quad colorido com o texto centralizado.
+    float btnMinX = -0.28f, btnMaxX = 0.28f;
+    float btnMinY = -0.30f, btnMaxY = -0.12f;
+
+    g_RestartButtonMinX = btnMinX;
+    g_RestartButtonMaxX = btnMaxX;
+    g_RestartButtonMinY = btnMinY;
+    g_RestartButtonMaxY = btnMaxY;
+    g_RestartButtonValid = true;
+
+    // Detecta hover do mouse sobre o botão para dar feedback visual simples.
+    double mouseX, mouseY;
+    glfwGetCursorPos(window, &mouseX, &mouseY);
+    int winW, winH;
+    glfwGetWindowSize(window, &winW, &winH);
+    float ndcX = (winW > 0) ? (2.0f * (float)mouseX / (float)winW - 1.0f) : 0.0f;
+    float ndcY = (winH > 0) ? (1.0f - 2.0f * (float)mouseY / (float)winH) : 0.0f;
+    bool hovering = (ndcX >= btnMinX && ndcX <= btnMaxX && ndcY >= btnMinY && ndcY <= btnMaxY);
+
+    if (hovering)
+        DrawColoredQuad2D(btnMinX, btnMinY, btnMaxX, btnMaxY, 0.35f, 0.75f, 0.35f, 1.0f);
+    else
+        DrawColoredQuad2D(btnMinX, btnMinY, btnMaxX, btnMaxY, 0.20f, 0.55f, 0.20f, 1.0f);
+
+    float buttonTextScale = 1.6f;
+    float buttonTextX = btnMinX + 0.045f;
+    float buttonTextY = (btnMinY + btnMaxY) / 2.0f - 0.03f;
+    TextRendering_PrintString(window, buttonLabel, buttonTextX, buttonTextY, buttonTextScale);
+
+    // Dica adicional: tecla R também reinicia o jogo.
+    std::string hint = "(ou pressione R)";
+    DrawColoredQuad2D(btnMinX - 0.02f, btnMinY - 0.16f, btnMaxX + 0.02f, btnMinY - 0.02f, 0.05f, 0.05f, 0.05f, 0.92f);
+    TextRendering_PrintString(window, hint, btnMinX + 0.02f, btnMinY - 0.10f, 1.2f);
+}
+
 // Carrega um Vertex Shader de um arquivo GLSL. Veja definição de LoadShader() abaixo.
 GLuint LoadShader_Vertex(const char *filename)
 {
@@ -1530,6 +2024,33 @@ void FramebufferSizeCallback(GLFWwindow *window, int width, int height)
 // Função callback chamada sempre que o usuário aperta algum dos botões do mouse
 void MouseButtonCallback(GLFWwindow *window, int button, int action, int mods)
 {
+    // Tela de fim de jogo: um clique do botão esquerdo dentro da área do
+    // botão "Jogar novamente" reinicia uma nova partida.
+    if (g_GameState == GAME_OVER && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
+    {
+        if (g_RestartButtonValid)
+        {
+            double mouseX, mouseY;
+            glfwGetCursorPos(window, &mouseX, &mouseY);
+            int winW, winH;
+            glfwGetWindowSize(window, &winW, &winH);
+            float ndcX = (winW > 0) ? (2.0f * (float)mouseX / (float)winW - 1.0f) : 0.0f;
+            float ndcY = (winH > 0) ? (1.0f - 2.0f * (float)mouseY / (float)winH) : 0.0f;
+
+            if (ndcX >= g_RestartButtonMinX && ndcX <= g_RestartButtonMaxX &&
+                ndcY >= g_RestartButtonMinY && ndcY <= g_RestartButtonMaxY)
+            {
+                ResetGame(window);
+                if (g_FpsMode)
+                {
+                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                    g_FirstMouse = true;
+                }
+                return;
+            }
+        }
+    }
+
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
     {
         // Se o usuário pressionou o botão esquerdo do mouse, guardamos a
@@ -1682,6 +2203,18 @@ void KeyCallback(GLFWwindow *window, int key, int scancode, int action, int mod)
     // Se o usuário pressionar a tecla ESC, fechamos a janela.
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
         glfwSetWindowShouldClose(window, GL_TRUE);
+
+    // Na tela de fim de jogo, a tecla R reinicia uma nova partida (atalho de
+    // teclado equivalente a clicar no botão "Jogar novamente").
+    if (g_GameState == GAME_OVER && key == GLFW_KEY_R && action == GLFW_PRESS)
+    {
+        ResetGame(window);
+        if (g_FpsMode)
+        {
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            g_FirstMouse = true;
+        }
+    }
 
     // O código abaixo implementa a seguinte lógica:
     //   Se apertar tecla X       então g_AngleX += delta;

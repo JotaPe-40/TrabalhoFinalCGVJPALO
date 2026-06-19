@@ -2,6 +2,7 @@
 
 #include <random>
 #include <ctime>
+#include <cmath>
 
 const int mazeW = 7;
 const int mazeH = 7;
@@ -11,6 +12,8 @@ const float wallHeight = 1.0f;
 
 std::vector<std::vector<int>> wallHorz;
 std::vector<std::vector<int>> wallVert;
+
+bool g_OnlyBorderWalls = false;
 
 void GenerateMaze()
 {
@@ -76,4 +79,66 @@ void GenerateMaze()
         visited[nr][nc] = 1;
         stack.emplace_back(nr, nc);
     }
+}
+
+bool MazeCollides(float testX, float testZ, float halfX, float halfZ)
+{
+    const float eps = 0.05f;
+
+    float pminX = testX - halfX;
+    float pmaxX = testX + halfX;
+    float pminZ = testZ - halfZ;
+    float pmaxZ = testZ + halfZ;
+
+    // Paredes horizontais (perpendiculares ao eixo Z, compridas em X)
+    for (int i = 0; i <= mazeH; i++)
+    {
+        for (int j = 0; j < mazeW; j++)
+        {
+            if (!wallHorz[i][j])
+                continue;
+
+            if (g_OnlyBorderWalls && !(i == 0 || i == mazeH))
+                continue;
+
+            float x = (j - mazeW / 2.0f + 0.5f) * cellSize;
+            float z = (i - mazeH / 2.0f) * cellSize;
+
+            float wall_xmin = x - cellSize / 2.0f;
+            float wall_xmax = x + cellSize / 2.0f;
+
+            bool overlapX = (pminX <= wall_xmax) && (pmaxX >= wall_xmin);
+            float dz = fabs(testZ - z);
+
+            if (overlapX && dz < (halfZ + eps))
+                return true;
+        }
+    }
+
+    // Paredes verticais (perpendiculares ao eixo X, compridas em Z)
+    for (int i = 0; i < mazeH; i++)
+    {
+        for (int j = 0; j <= mazeW; j++)
+        {
+            if (!wallVert[i][j])
+                continue;
+
+            if (g_OnlyBorderWalls && !(j == 0 || j == mazeW))
+                continue;
+
+            float x = (j - mazeW / 2.0f) * cellSize;
+            float z = (i - mazeH / 2.0f + 0.5f) * cellSize;
+
+            float wall_zmin = z - cellSize / 2.0f;
+            float wall_zmax = z + cellSize / 2.0f;
+
+            bool overlapZ = (pminZ <= wall_zmax) && (pmaxZ >= wall_zmin);
+            float dx = fabs(testX - x);
+
+            if (overlapZ && dx < (halfX + eps))
+                return true;
+        }
+    }
+
+    return false;
 }

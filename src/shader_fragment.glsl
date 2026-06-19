@@ -24,6 +24,7 @@ uniform mat4 projection;
 #define PLANE  2
 #define WALL   3
 #define TETO   4
+#define RAT    5
 uniform int object_id;
 
 // Parâmetros da axis-aligned bounding box (AABB) do modelo
@@ -35,6 +36,7 @@ uniform sampler2D TextureImage0;
 uniform sampler2D TextureImage1;
 uniform sampler2D TextureImage2;
 uniform sampler2D TextureImage3;
+uniform sampler2D TextureImage4;
 uniform float TextureRepeat;
 
 // O valor de saída ("out") de um Fragment Shader é a cor final do fragmento.
@@ -143,6 +145,24 @@ void main()
     {
         vec2 uvw = texcoords * TextureRepeat;
         Kd0 = texture(TextureImage0, uvw).rgb;
+    }
+
+    else if ( object_id == RAT )
+    {
+        // Coordenadas de textura do ratinho: projeção planar XZ em
+        // coordenadas do modelo (análoga à projeção planar XY usada para o
+        // BUNNY acima), já que o corpo do rato é mais "achatado" no plano
+        // XZ (largura x comprimento) do que no eixo Y (altura).
+        float minx = bbox_min.x;
+        float maxx = bbox_max.x;
+
+        float minz = bbox_min.z;
+        float maxz = bbox_max.z;
+
+        U = (position_model.x - minx) / (maxx - minx);
+        V = (position_model.z - minz) / (maxz - minz);
+
+        Kd0 = texture(TextureImage4, vec2(U,V) * TextureRepeat).rgb;
     }
 
     // Equação de Iluminação

@@ -12,6 +12,8 @@ set(SOURCES
   src/textrendering.cpp
   src/tiny_obj_loader.cpp
   src/stb_image.cpp
+  src/audio.cpp
+  src/miniaudio_impl.cpp
   src/glad.c
 )
 
@@ -100,7 +102,9 @@ if(WIN32)
 
   message(STATUS "LIBGLFW = ${LIBGLFW}")
 
-  target_link_libraries(${EXECUTABLE_NAME} ${LIBGLFW} gdi32 opengl32)
+  # ole32 e winmm são necessárias pela biblioteca de áudio miniaudio
+  # (src/audio.cpp / include/miniaudio.h) no backend WASAPI usado no Windows.
+  target_link_libraries(${EXECUTABLE_NAME} ${LIBGLFW} gdi32 opengl32 ole32 winmm)
 
 elseif(UNIX)
 

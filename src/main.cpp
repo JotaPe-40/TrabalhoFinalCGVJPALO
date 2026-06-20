@@ -57,6 +57,7 @@
 
 // NOSSOS INCLUDES
 #include "maze.h"
+#include "audio.h"
 
 struct ObjModel
 {
@@ -164,6 +165,7 @@ void PickNewBezierLeg(Rat &rat, std::mt19937 &rng);                 // Sorteia u
 void PickFleeBezierLeg(Rat &rat, std::mt19937 &rng, glm::vec3 awayFrom); // Sorteia um trecho de fuga, afastando o rato do ponto "awayFrom"
 void UpdateRats(float dt);                                          // Avança a simulação de todos os ratos em dt segundos
 void CheckPlayerRatCollisions();                                    // Teste cubo-cubo jogador-rato: ao colidir, assusta o rato (foge)
+bool IsRatVisibleToPlayer(const Rat &rat, glm::vec3 playerEyePos, glm::vec3 viewDir); // Rato dentro do campo de visão e sem parede bloqueando
 bool SphereAabbIntersect(glm::vec3 sphereCenter, float sphereRadius,
                           glm::vec3 boxCenter, glm::vec3 halfExtents); // Teste de intersecção cubo-esfera
 bool AabbAabbIntersect(glm::vec3 centerA, glm::vec3 halfA,
@@ -356,6 +358,10 @@ std::string FindFile(const std::string &path)
 
 int main(int argc, char *argv[])
 {
+    // Inicializa o sistema de áudio (trilha de fundo, efeitos sonoros dos
+    // ratos, som de vitória). Se falhar (ex.: sem dispositivo de áudio
+    // disponível), o jogo continua normalmente, apenas sem som.
+    Audio_Init();
 
     // Inicializamos a biblioteca GLFW, utilizada para criar uma janela do
     // sistema operacional, onde poderemos renderizar com OpenGL.
@@ -496,6 +502,11 @@ int main(int argc, char *argv[])
     g_GameState = GAME_PLAYING;
     g_GameStartTime = lastTime;
 
+    // Inicia a trilha de fundo (música de exploração estilo RPG), que toca
+    // em loop contínuo até o fim da partida (ver g_GameState == GAME_OVER
+    // mais abaixo, onde a música é parada).
+    Audio_PlayBackgroundMusic();
+
     // Ficamos em um loop infinito, renderizando, até que o usuário feche a janela
     while (!glfwWindowShouldClose(window))
     {
@@ -597,6 +608,26 @@ int main(int argc, char *argv[])
             UpdateRats(dt);
             CheckPlayerRatCollisions();
 
+            // Som ambiente: toca um guincho de rato (aleatório, com
+            // intervalo mínimo entre repetições) sempre que pelo menos um
+            // rato estiver visível para o jogador (dentro do campo de
+            // visão da câmera em primeira pessoa, sem parede no meio).
+            glm::vec3 playerEyePos = glm::vec3(
+                g_PlayerPosition.x,
+                g_PlayerPosition.y + g_PlayerEyeHeight,
+                g_PlayerPosition.z);
+
+            bool anyRatVisible = false;
+            for (const Rat &rat : g_Rats)
+            {
+                if (IsRatVisibleToPlayer(rat, playerEyePos, front3))
+                {
+                    anyRatVisible = true;
+                    break;
+                }
+            }
+            Audio_UpdateRatSqueaks(dt, anyRatVisible);
+
             glm::vec3 playerBoxCenter = glm::vec3(
                 g_PlayerPosition.x,
                 g_PlayerPosition.y + g_PlayerHalfHeight,
@@ -607,6 +638,11 @@ int main(int argc, char *argv[])
             {
                 g_GameState = GAME_OVER;
                 g_GameOverElapsed = currentTime - g_GameStartTime;
+
+                // A trilha de fundo toca em loop "até o jogo acabar": agora
+                // que o jogador venceu, ela para e o som de vitória toca.
+                Audio_StopBackgroundMusic();
+                Audio_PlayWinSound();
 
                 // Libera o cursor do mouse (estava capturado pelo modo FPS)
                 // para que o jogador consiga mover o mouse até o botão
@@ -884,6 +920,9 @@ int main(int argc, char *argv[])
 
     // Finalizamos o uso dos recursos do sistema operacional
     glfwTerminate();
+
+    // Libera os recursos do sistema de áudio (engine, sons carregados).
+    Audio_Shutdown();
 
     // Fim do programa
     return 0;
@@ -1774,6 +1813,58 @@ void UpdateRats(float dt)
     }
 }
 
+// Testa se um rato está "à vista" do jogador: dentro de uma distância
+// razoável, dentro do campo de visão da câmera em primeira pessoa (cone
+// cujo ângulo de abertura é um pouco maior que o FOV da câmera, para soar
+// mais perceptível), e sem nenhuma parede do labirinto bloqueando a linha
+// reta entre o jogador e o rato. Usada apenas para decidir quando tocar os
+// efeitos sonoros de guincho dos ratos (ver Audio_UpdateRatSqueaks).
+bool IsRatVisibleToPlayer(const Rat &rat, glm::vec3 playerEyePos, glm::vec3 viewDir)
+{
+    const float kMaxVisibleDistance = cellSize * 5.0f; // ratos muito distantes não "contam"
+    const float kHalfFovRadians = 0.6981317f;          // ~40 graus (um pouco mais aberto que o FOV de 30 graus da câmera)
+
+    glm::vec3 toRat = rat.position - playerEyePos;
+    toRat.y = 0.0f; // comparação só no plano horizontal (XZ)
+
+    float distance = glm::length(toRat);
+    if (distance < 1e-4f)
+        return true; // rato exatamente na posição do jogador (caso degenerado)
+
+    if (distance > kMaxVisibleDistance)
+        return false;
+
+    glm::vec3 toRatDir = toRat / distance;
+    glm::vec3 viewDirXZ = glm::normalize(glm::vec3(viewDir.x, 0.0f, viewDir.z));
+
+    float cosAngle = glm::dot(viewDirXZ, toRatDir);
+    float cosHalfFov = cosf(kHalfFovRadians);
+    if (cosAngle < cosHalfFov)
+        return false; // fora do cone de visão
+
+    // Verifica se há alguma parede bloqueando a linha de visão, amostrando
+    // pontos ao longo do segmento jogador->rato e testando cada um contra
+    // MazeCollides (a mesma função usada para a colisão de movimento). Uma
+    // amostragem com passo pequeno e fixo é suficiente aqui, já que esta
+    // checagem não precisa de precisão geométrica exata - é só para decidir
+    // se toca ou não um efeito sonoro.
+    const float kStepSize = 0.12f;
+    int numSteps = (int)(distance / kStepSize);
+    numSteps = glm::clamp(numSteps, 1, 200);
+
+    for (int i = 1; i < numSteps; i++)
+    {
+        float t = (float)i / (float)numSteps;
+        glm::vec3 samplePoint = playerEyePos + toRat * t;
+        // Usa uma hitbox pontual (semi-largura quase zero) só para testar
+        // se o próprio ponto está dentro de uma parede.
+        if (MazeCollides(samplePoint.x, samplePoint.z, 0.02f, 0.02f))
+            return false;
+    }
+
+    return true;
+}
+
 // Testa a colisão cubo-cubo entre o jogador e cada rato (hitbox cúbica do
 // jogador vs. hitbox quadrada/cúbica do rato). Ao colidir, o rato entra em
 // estado de "assustado": interrompe imediatamente o trecho de Bézier atual
@@ -1798,6 +1889,12 @@ void CheckPlayerRatCollisions()
 
         if (AabbAabbIntersect(playerBoxCenter, playerHalfExtents, ratBoxCenter, ratHalfExtents))
         {
+            // Toca o som de "rato assustado" apenas na transição para o
+            // estado de fuga (e não em todo frame em que as hitboxes
+            // continuarem sobrepostas), para não repetir o som sem parar.
+            if (!rat.scared)
+                Audio_PlayRatScaredSound();
+
             rat.scared = true;
             rat.scaredTimer = g_RatScaredDuration;
             // Interrompe o trecho atual e começa a fugir imediatamente, a
@@ -1853,6 +1950,10 @@ void ResetGame(GLFWwindow *window)
     g_GameStartTime = glfwGetTime();
     g_GameOverElapsed = 0.0;
     g_RestartButtonValid = false;
+
+    // Reinicia a trilha de fundo para a nova partida (ela foi parada ao
+    // final da partida anterior, junto com a tela de fim de jogo).
+    Audio_PlayBackgroundMusic();
 
     (void)window;
 }

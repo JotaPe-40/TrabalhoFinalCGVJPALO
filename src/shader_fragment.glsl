@@ -149,18 +149,16 @@ void main()
 
     else if ( object_id == RAT )
     {
-        // Coordenadas de textura do ratinho: projeção planar XZ em
-        // coordenadas do modelo (análoga à projeção planar XY usada para o
-        // BUNNY acima), já que o corpo do rato é mais "achatado" no plano
-        // XZ (largura x comprimento) do que no eixo Y (altura).
-        float minx = bbox_min.x;
-        float maxx = bbox_max.x;
-
-        float minz = bbox_min.z;
-        float maxz = bbox_max.z;
-
-        U = (position_model.x - minx) / (maxx - minx);
-        V = (position_model.z - minz) / (maxz - minz);
+        // Coordenadas de textura DO PRÓPRIO OBJETO: o modelo data/rat.obj
+        // (convertido de assets/rat.stl) inclui coordenadas de textura (vt)
+        // próprias, calculadas com um mapeamento cilíndrico ao redor do
+        // eixo longitudinal real do corpo do rato (acompanhando a
+        // curvatura da cabeça à cauda) - ao contrário da projeção planar
+        // via bounding box usada para o BUNNY/PLANE/TETO/WALL, aqui as
+        // coordenadas já vêm prontas do arquivo OBJ (atributo "texcoords",
+        // interpolado pelo rasterizador a partir de cada vértice).
+        U = texcoords.x;
+        V = texcoords.y;
 
         Kd0 = texture(TextureImage4, vec2(U,V) * TextureRepeat).rgb;
     }

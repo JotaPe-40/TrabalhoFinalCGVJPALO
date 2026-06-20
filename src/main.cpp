@@ -127,6 +127,13 @@ struct Rat
     float duration;      // duração (segundos) do trecho atual (independente de FPS)
     glm::vec3 position;  // posição atual (cache, atualizada em UpdateRats)
     float yaw;           // orientação para desenhar o modelo virado para onde anda
+
+    // Estado de "assustado": ativado quando o jogador colide com o rato
+    // (teste de intersecção cubo-cubo). Enquanto assustado, o rato foge na
+    // direção oposta ao jogador, com velocidade maior, ignorando o sorteio
+    // normal de destino aleatório até o temporizador abaixo zerar.
+    bool scared = false;
+    float scaredTimer = 0.0f; // segundos restantes em estado de fuga
 };
 
 // Declaração de funções utilizadas para pilha de matrizes de modelagem.
@@ -154,7 +161,9 @@ void RandomizeStartAndGoalCells();                                   // Sorteia 
 void SpawnRats();                                                   // Cria/recria os ratinhos em posições aleatórias válidas
 glm::vec3 RandomPointInsideMaze(std::mt19937 &rng);                 // Sorteia um ponto de mundo dentro do labirinto
 void PickNewBezierLeg(Rat &rat, std::mt19937 &rng);                 // Sorteia um novo trecho de curva de Bézier para um rato
+void PickFleeBezierLeg(Rat &rat, std::mt19937 &rng, glm::vec3 awayFrom); // Sorteia um trecho de fuga, afastando o rato do ponto "awayFrom"
 void UpdateRats(float dt);                                          // Avança a simulação de todos os ratos em dt segundos
+void CheckPlayerRatCollisions();                                    // Teste cubo-cubo jogador-rato: ao colidir, assusta o rato (foge)
 bool SphereAabbIntersect(glm::vec3 sphereCenter, float sphereRadius,
                           glm::vec3 boxCenter, glm::vec3 halfExtents); // Teste de intersecção cubo-esfera
 bool AabbAabbIntersect(glm::vec3 centerA, glm::vec3 halfA,
@@ -289,6 +298,7 @@ std::vector<Rat> g_Rats;
 const float g_RatHalfSize = 0.18f;   // hitbox quadrada (mesma semi-largura em X e Z)
 const float g_RatScale = 0.0046f;    // escala do modelo 3D (rat.obj) para ~0.45 unidades de comprimento
 const int g_NumRats = 6;
+const float g_RatScaredDuration = 3.5f; // segundos que o rato passa fugindo após ser tocado pelo jogador
 
 // ===========================================================================
 // Estado de jogo / cronômetro / tela de fim de jogo
@@ -578,11 +588,14 @@ int main(int argc, char *argv[])
         g_PlayerPosition = ConstrainPlayerToGround(prevPos);
 
         // Atualiza a simulação dos ratinhos (movimento aleatório via Bézier)
-        // e testa a colisão cubo-esfera entre o jogador e o smile. Ambas as
-        // verificações só acontecem enquanto o jogo está em andamento.
+        // e testa a colisão cubo-esfera entre o jogador e o smile, além da
+        // colisão cubo-cubo entre o jogador e os ratos (que os assusta e
+        // faz fugir). Todas essas verificações só acontecem enquanto o jogo
+        // está em andamento.
         if (g_GameState == GAME_PLAYING)
         {
             UpdateRats(dt);
+            CheckPlayerRatCollisions();
 
             glm::vec3 playerBoxCenter = glm::vec3(
                 g_PlayerPosition.x,
@@ -1557,6 +1570,85 @@ void PickNewBezierLeg(Rat &rat, std::mt19937 &rng)
     rat.duration = durationDist(rng);
 }
 
+// Sorteia um trecho de Bézier de FUGA: o destino é escolhido preferindo
+// pontos que aumentem a distância até "awayFrom" (tipicamente a posição do
+// jogador no momento da colisão), dentro do labirinto e sem colidir com
+// paredes. Usado quando o jogador encosta no rato (teste cubo-cubo), para
+// fazer o rato "assustado" correr na direção contrária ao perigo.
+void PickFleeBezierLeg(Rat &rat, std::mt19937 &rng, glm::vec3 awayFrom)
+{
+    rat.p0 = rat.position;
+
+    glm::vec3 fleeDir = rat.position - awayFrom;
+    float fleeDirLen = glm::length(glm::vec2(fleeDir.x, fleeDir.z));
+    if (fleeDirLen > 1e-5f)
+        fleeDir /= fleeDirLen;
+    else
+    {
+        // Jogador e rato praticamente no mesmo ponto: foge em uma direção
+        // aleatória qualquer.
+        std::uniform_real_distribution<float> angleDist(0.0f, 6.2831853f);
+        float angle = angleDist(rng);
+        fleeDir = glm::vec3(sinf(angle), 0.0f, cosf(angle));
+    }
+
+    // Tenta vários candidatos dentro do labirinto, escolhendo o que está
+    // mais alinhado com a direção de fuga (maior produto escalar com
+    // "fleeDir") entre os que não colidem com paredes. Isso aproxima um
+    // comportamento de "correr para longe" sem precisar resolver caminhos
+    // dentro do labirinto (o que seria mais caro computacionalmente).
+    glm::vec3 bestTarget = rat.position + fleeDir * (cellSize * 1.5f);
+    float bestScore = -1e9f;
+    bool foundValid = false;
+
+    const int maxAttempts = 30;
+    for (int attempt = 0; attempt < maxAttempts; attempt++)
+    {
+        glm::vec3 candidate = RandomPointInsideMaze(rng);
+        if (MazeCollides(candidate.x, candidate.z, g_RatHalfSize, g_RatHalfSize))
+            continue;
+
+        glm::vec3 candidateDir = candidate - rat.position;
+        float candidateLen = glm::length(glm::vec2(candidateDir.x, candidateDir.z));
+        if (candidateLen < 1e-5f)
+            continue;
+
+        float score = glm::dot(glm::vec2(candidateDir.x, candidateDir.z) / candidateLen,
+                                glm::vec2(fleeDir.x, fleeDir.z));
+
+        if (score > bestScore)
+        {
+            bestScore = score;
+            bestTarget = candidate;
+            foundValid = true;
+        }
+    }
+
+    glm::vec3 target = foundValid ? bestTarget : rat.position;
+
+    glm::vec3 dir = target - rat.p0;
+    glm::vec3 perp = glm::vec3(-dir.z, 0.0f, dir.x);
+    float perpLen = glm::length(perp);
+    if (perpLen > 1e-5f)
+        perp /= perpLen;
+
+    std::uniform_real_distribution<float> lateralDist(-0.2f, 0.2f); // fuga mais "direta", menos sinuosa
+    float lateral = lateralDist(rng);
+
+    rat.p1 = rat.p0 + dir * 0.33f + perp * lateral;
+    rat.p2 = rat.p0 + dir * 0.66f + perp * lateral;
+    rat.p3 = target;
+
+    rat.p0.y = rat.p1.y = rat.p2.y = rat.p3.y = g_GroundY;
+
+    rat.t = 0.0f;
+
+    // Foge mais rápido que o passeio aleatório normal (duration menor =
+    // percorre a mesma curva em menos tempo = mais veloz).
+    std::uniform_real_distribution<float> fleeDurationDist(0.5f, 1.0f);
+    rat.duration = fleeDurationDist(rng);
+}
+
 // Cria (ou recria) os ratinhos do labirinto em posições aleatórias válidas
 // (fora das paredes), cada um já com seu primeiro trecho de Bézier sorteado.
 void SpawnRats()
@@ -1602,19 +1694,42 @@ static glm::vec3 EvalCubicBezier(const glm::vec3 &p0, const glm::vec3 &p1,
 }
 
 // Avança a simulação de todos os ratinhos em dt segundos: cada rato anda ao
-// longo do trecho de Bézier atual; ao terminar o trecho, um novo é sorteado.
-// A movimentação resultante é então validada contra a colisão com as paredes
-// do labirinto (hitbox quadrada); se a nova posição colidiria com uma parede,
-// o rato simplesmente sorteia um novo destino imediatamente (na prática isso
-// quase não ocorre, já que os próprios pontos de controle já são validados
-// em PickNewBezierLeg, mas mantemos a checagem por robustez/segurança).
+// longo do trecho de Bézier atual; ao terminar o trecho, um novo é sorteado
+// (um trecho de fuga, se o rato estiver "assustado"; um trecho de passeio
+// aleatório, caso contrário). A movimentação resultante é então validada
+// contra a colisão com as paredes do labirinto (hitbox quadrada); se a nova
+// posição colidiria com uma parede, o rato simplesmente sorteia um novo
+// destino imediatamente (na prática isso quase não ocorre, já que os
+// próprios pontos de controle já são validados em PickNewBezierLeg /
+// PickFleeBezierLeg, mas mantemos a checagem por robustez/segurança).
 void UpdateRats(float dt)
 {
     for (Rat &rat : g_Rats)
     {
+        // Atualiza o temporizador de "assustado": ao zerar, o rato volta a
+        // se mover normalmente (passeio aleatório) a partir do próximo
+        // trecho de Bézier sorteado.
+        if (rat.scared)
+        {
+            rat.scaredTimer -= dt;
+            if (rat.scaredTimer <= 0.0f)
+            {
+                rat.scared = false;
+                rat.scaredTimer = 0.0f;
+            }
+        }
+
+        auto pickNextLeg = [&](Rat &r)
+        {
+            if (r.scared)
+                PickFleeBezierLeg(r, g_RatRng, g_PlayerPosition);
+            else
+                PickNewBezierLeg(r, g_RatRng);
+        };
+
         if (rat.duration <= 0.0f)
         {
-            PickNewBezierLeg(rat, g_RatRng);
+            pickNextLeg(rat);
             continue;
         }
 
@@ -1624,7 +1739,7 @@ void UpdateRats(float dt)
         if (rat.t >= 1.0f)
         {
             rat.position = rat.p3;
-            PickNewBezierLeg(rat, g_RatRng);
+            pickNextLeg(rat);
             continue;
         }
 
@@ -1636,7 +1751,7 @@ void UpdateRats(float dt)
         {
             // Trecho atual ficou inválido (não deveria acontecer na prática):
             // aborta o trecho e sorteia outro a partir da posição anterior.
-            PickNewBezierLeg(rat, g_RatRng);
+            pickNextLeg(rat);
             continue;
         }
 
@@ -1656,6 +1771,39 @@ void UpdateRats(float dt)
 
         rat.position = newPos;
         (void)prevT;
+    }
+}
+
+// Testa a colisão cubo-cubo entre o jogador e cada rato (hitbox cúbica do
+// jogador vs. hitbox quadrada/cúbica do rato). Ao colidir, o rato entra em
+// estado de "assustado": interrompe imediatamente o trecho de Bézier atual
+// e começa a fugir na direção oposta ao jogador (ver PickFleeBezierLeg),
+// permanecendo em fuga por g_RatScaredDuration segundos.
+void CheckPlayerRatCollisions()
+{
+    glm::vec3 playerBoxCenter = glm::vec3(
+        g_PlayerPosition.x,
+        g_PlayerPosition.y + g_PlayerHalfHeight,
+        g_PlayerPosition.z);
+    glm::vec3 playerHalfExtents = glm::vec3(g_PlayerHalfWidth, g_PlayerHalfHeight, g_PlayerHalfDepth);
+
+    // Hitbox do rato como um cubo: mesma semi-largura/profundidade usada
+    // para a colisão com paredes (g_RatHalfSize), com uma altura pequena e
+    // fixa (o modelo do rato é baixo), centrada um pouco acima do chão.
+    glm::vec3 ratHalfExtents = glm::vec3(g_RatHalfSize, g_RatHalfSize * 0.6f, g_RatHalfSize);
+
+    for (Rat &rat : g_Rats)
+    {
+        glm::vec3 ratBoxCenter = glm::vec3(rat.position.x, rat.position.y + ratHalfExtents.y, rat.position.z);
+
+        if (AabbAabbIntersect(playerBoxCenter, playerHalfExtents, ratBoxCenter, ratHalfExtents))
+        {
+            rat.scared = true;
+            rat.scaredTimer = g_RatScaredDuration;
+            // Interrompe o trecho atual e começa a fugir imediatamente, a
+            // partir da posição atual do rato, na direção oposta ao jogador.
+            PickFleeBezierLeg(rat, g_RatRng, g_PlayerPosition);
+        }
     }
 }
 

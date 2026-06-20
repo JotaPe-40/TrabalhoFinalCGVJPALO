@@ -15,7 +15,7 @@ std::vector<std::vector<int>> wallVert;
 
 bool g_OnlyBorderWalls = false;
 
-void GenerateMaze()
+void GenerateMaze(int startRow, int startCol)
 {
     std::vector<std::vector<int>> visited(mazeH, std::vector<int>(mazeW, 0));
 
@@ -42,8 +42,22 @@ void GenerateMaze()
 
     std::mt19937 rng((unsigned)time(NULL));
 
-    int sr = 0;
-    int sc = 0;
+    // Célula onde o algoritmo DFS (randomized backtracker) começa a "escavar"
+    // o labirinto. Como este algoritmo gera uma árvore de expansão completa
+    // (um "labirinto perfeito", sem ciclos), TODAS as células do grid ficam
+    // garantidamente conectadas por exatamente um caminho a partir daqui -
+    // não apenas a célula inicial, mas o grid completo. Isso significa que,
+    // independente de onde o jogador e o "smile" sejam sorteados depois,
+    // sempre existirá um caminho entre os dois.
+    int sr = startRow;
+    int sc = startCol;
+
+    // Defesa extra: garante que a célula inicial está dentro do grid, caso
+    // receba parâmetros inválidos (não deveria ocorrer em uso normal).
+    if (sr < 0 || sr >= mazeH)
+        sr = 0;
+    if (sc < 0 || sc >= mazeW)
+        sc = 0;
 
     visited[sr][sc] = 1;
     stack.emplace_back(sr, sc);

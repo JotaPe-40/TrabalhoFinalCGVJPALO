@@ -150,6 +150,7 @@ void PrintObjModelInfo(ObjModel *);                                          // 
 
 // NOSSAS FUNÇÕES: ratos, colisão jogador-smile e tela de fim de jogo.
 glm::vec3 ComputeSmilePosition();                                   // Posição (mundo) do centro do smile na célula configurada
+void RandomizeStartAndGoalCells();                                   // Sorteia células (distintas) para o jogador e o smile, e regenera o labirinto a partir da célula do jogador
 void SpawnRats();                                                   // Cria/recria os ratinhos em posições aleatórias válidas
 glm::vec3 RandomPointInsideMaze(std::mt19937 &rng);                 // Sorteia um ponto de mundo dentro do labirinto
 void PickNewBezierLeg(Rat &rat, std::mt19937 &rng);                 // Sorteia um novo trecho de curva de Bézier para um rato
@@ -161,6 +162,7 @@ bool AabbAabbIntersect(glm::vec3 centerA, glm::vec3 halfA,
 void ResetGame(GLFWwindow *window);                                  // Reinicia labirinto, jogador, ratos e cronômetro
 void DrawGameOverScreen(GLFWwindow *window, double elapsedSeconds); // Desenha overlay de fim de jogo + botão "jogar novamente"
 void DrawColoredQuad2D(float x0, float y0, float x1, float y1, float r, float g, float b, float a); // Desenha um quad 2D colorido (para o botão)
+void DrawPlayerCharacter(glm::vec3 position, float yaw, const glm::mat4 &view, const glm::mat4 &projection); // Desenha o boneco explorador do jogador
 
 // Declaração de funções auxiliares para renderizar texto dentro da janela
 // OpenGL. Estas funções estão definidas no arquivo "textrendering.cpp".
@@ -475,15 +477,10 @@ int main(int argc, char *argv[])
 
     double lastTime = glfwGetTime();
 
-    GenerateMaze(); // REFATORAÇÃO - SEPARA CÓDIGO DO LABIRINTO EM OUTRO ARQUIVO
-    int sr = 0;
-    int sc = 0;
-
-    // Spawn no centro de uma célula (evita nascer sobre linha de parede).
-    g_PlayerPosition = glm::vec3(
-        (sc - mazeW / 2.0f + 0.5f) * cellSize,
-        g_GroundY,
-        (sr - mazeH / 2.0f + 0.5f) * cellSize);
+    // Sorteia posições aleatórias (e distintas) para o jogador e o smile, e
+    // gera um novo labirinto a partir da célula do jogador (garantindo, por
+    // construção do algoritmo, um caminho entre as duas posições).
+    RandomizeStartAndGoalCells();
 
     SpawnRats();
     g_GameState = GAME_PLAYING;
@@ -816,22 +813,18 @@ int main(int argc, char *argv[])
             DrawVirtualObject("the_rat");
         }
 
+        // O personagem do jogador (boneco explorador) é desenhado na visão
+        // de cima (TAB), no lugar onde antes havia um marcador esférico
+        // (removido, para não ser confundido com o "smile"). Em primeira
+        // pessoa o boneco não é desenhado, já que a câmera fica dentro da
+        // própria cabeça do personagem (não há, por ora, um "view model").
         if (g_TopView)
         {
-            float playerMarkerScale = 0.15f * cellSize;
-
-            model =
-                Matrix_Translate(g_PlayerPosition.x,
-                                 g_GroundY + 0.4f,
-                                 g_PlayerPosition.z) *
-                Matrix_Scale(playerMarkerScale,
-                             playerMarkerScale,
-                             playerMarkerScale);
-
-            glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
-            glUniform1i(g_object_id_uniform, SPHERE);
-
-            DrawVirtualObject("the_sphere");
+            DrawPlayerCharacter(g_PlayerPosition, g_PlayerYaw, view, projection);
+            // Restaura o programa de GPU principal da cena 3D (o personagem
+            // usa seu próprio programa de shader, com cor sólida em vez de
+            // textura) antes de continuar o resto do frame.
+            glUseProgram(g_GpuProgramID);
         }
 
         glEnable(GL_CULL_FACE);
@@ -1454,6 +1447,54 @@ glm::vec3 ComputeSmilePosition()
     return glm::vec3(sphereX, g_GroundY + 0.4f, sphereZ);
 }
 
+// Sorteia uma célula aleatória para o jogador nascer, regenera o labirinto
+// inteiro a partir dessa célula (o algoritmo DFS usado em GenerateMaze
+// produz um "labirinto perfeito" - uma árvore de expansão completa - o que
+// garante, por construção, exatamente um caminho entre QUAISQUER duas
+// células do grid) e então sorteia uma célula diferente da do jogador para
+// posicionar o "smile". Por fim, atualiza g_PlayerPosition/g_PlayerYaw e
+// g_SphereRow/g_SphereCol de acordo.
+void RandomizeStartAndGoalCells()
+{
+    std::uniform_int_distribution<int> rowDist(0, mazeH - 1);
+    std::uniform_int_distribution<int> colDist(0, mazeW - 1);
+
+    int playerRow = rowDist(g_RatRng);
+    int playerCol = colDist(g_RatRng);
+
+    GenerateMaze(playerRow, playerCol);
+
+    // Sorteia a célula do smile, evitando repetir a célula do jogador.
+    int smileRow, smileCol;
+    do
+    {
+        smileRow = rowDist(g_RatRng);
+        smileCol = colDist(g_RatRng);
+    } while (smileRow == playerRow && smileCol == playerCol && mazeW * mazeH > 1);
+
+    g_SphereRow = smileRow;
+    g_SphereCol = smileCol;
+
+    g_PlayerPosition = glm::vec3(
+        (playerCol - mazeW / 2.0f + 0.5f) * cellSize,
+        g_GroundY,
+        (playerRow - mazeH / 2.0f + 0.5f) * cellSize);
+
+    // Orienta o jogador para olhar, de forma aproximada, em direção ao
+    // smile, evitando que ele já comece de costas/encostado em uma parede.
+    //
+    // Convenção de yaw da câmera (diferente da convenção usada para orientar
+    // o modelo 3D do rato): com pitch=0, a direção para onde a câmera olha
+    // é (sin(yaw), cos(yaw)) em (x,z) - veja o cálculo de "front3" no laço
+    // principal. Logo, para olhar na direção "toGoal", o yaw correto é
+    // atan2(toGoal.x, toGoal.z) (sem o sinal trocado que é usado para o
+    // modelo do rato).
+    glm::vec3 toGoal = ComputeSmilePosition() - g_PlayerPosition;
+    if (glm::length(glm::vec2(toGoal.x, toGoal.z)) > 1e-5f)
+        g_PlayerYaw = atan2f(toGoal.x, toGoal.z);
+    g_PlayerPitch = 0.0f;
+}
+
 // Sorteia um ponto de mundo dentro dos limites do labirinto (não necessariamente
 // livre de paredes -- a validação de colisão é feita por quem chama).
 glm::vec3 RandomPointInsideMaze(std::mt19937 &rng)
@@ -1598,9 +1639,18 @@ void UpdateRats(float dt)
         }
 
         // Atualiza a orientação (yaw) do rato para ele "olhar" para onde anda.
+        //
+        // Observação sobre a convenção de ângulos usada aqui: com yaw = 0 o
+        // modelo do rato (rat.obj) aponta a cabeça para -Z. A matriz
+        // Matrix_Rotate_Y(yaw) leva a direção local (0,0,-1) para a direção
+        // de mundo (-sin(yaw), -cos(yaw)) em (x,z). Portanto, para que o
+        // rato olhe (e portanto ande de frente, não de costas) na direção
+        // do deslocamento "delta", o yaw correto satisfaz
+        // (-sin(yaw), -cos(yaw)) = delta_normalizado, isto é,
+        // yaw = atan2(-delta.x, -delta.z).
         glm::vec3 delta = newPos - rat.position;
         if (glm::length(glm::vec2(delta.x, delta.z)) > 1e-5f)
-            rat.yaw = atan2f(delta.x, delta.z);
+            rat.yaw = atan2f(-delta.x, -delta.z);
 
         rat.position = newPos;
         (void)prevT;
@@ -1639,21 +1689,13 @@ bool AabbAabbIntersect(glm::vec3 centerA, glm::vec3 halfA,
            (minA.z <= maxB.z && maxA.z >= minB.z);
 }
 
-// Reinicia uma nova partida: gera um novo labirinto, reposiciona o jogador
-// na célula inicial, recria os ratinhos e zera o cronômetro. Chamada quando
+// Reinicia uma nova partida: sorteia novas posições aleatórias (distintas)
+// para o jogador e para o "smile", gera um novo labirinto a partir da
+// célula do jogador, recria os ratinhos e zera o cronômetro. Chamada quando
 // o jogador clica/pressiona "Jogar novamente" na tela de fim de jogo.
 void ResetGame(GLFWwindow *window)
 {
-    GenerateMaze();
-
-    int sr = 0;
-    int sc = 0;
-    g_PlayerPosition = glm::vec3(
-        (sc - mazeW / 2.0f + 0.5f) * cellSize,
-        g_GroundY,
-        (sr - mazeH / 2.0f + 0.5f) * cellSize);
-    g_PlayerYaw = 3.1415926f;
-    g_PlayerPitch = 0.0f;
+    RandomizeStartAndGoalCells();
 
     SpawnRats();
 
@@ -1666,7 +1708,255 @@ void ResetGame(GLFWwindow *window)
 }
 
 // ---------------------------------------------------------------------------
-// Desenho de um quad 2D colorido (usado para o botão "Jogar novamente" e
+// Personagem do jogador: um boneco "explorador" simples (estilo voxel/
+// blocky, feito só de cubos coloridos), com chapéu, camisa, calça, braços,
+// pernas e uma lanterna na mão. Desenhado com um programa de GPU próprio
+// (model+view+projection 3D reais, mas cor sólida por cubo em vez de
+// textura), reaproveitando a mesma ideia/estilo do shader de quad 2D acima,
+// porém agora operando no espaço 3D do mundo, então o boneco aparece
+// corretamente posicionado e ocluso por paredes/objetos da cena.
+// ---------------------------------------------------------------------------
+static GLuint g_CubeSolidVAO = 0;
+static GLuint g_CubeSolidProgramID = 0;
+static GLint g_CubeSolidModelUniform = -1;
+static GLint g_CubeSolidViewUniform = -1;
+static GLint g_CubeSolidProjectionUniform = -1;
+static GLint g_CubeSolidColorUniform = -1;
+static bool g_CubeSolidInitialized = false;
+
+static const char *g_CubeSolidVertexShaderSource =
+    "#version 330 core\n"
+    "layout (location = 0) in vec4 model_coefficients;\n"
+    "layout (location = 1) in vec4 normal_coefficients;\n"
+    "uniform mat4 model;\n"
+    "uniform mat4 view;\n"
+    "uniform mat4 projection;\n"
+    "out vec3 v_normal_worldspace;\n"
+    "void main() {\n"
+    "    gl_Position = projection * view * model * model_coefficients;\n"
+    "    v_normal_worldspace = normalize(mat3(model) * normal_coefficients.xyz);\n"
+    "}\n";
+
+static const char *g_CubeSolidFragmentShaderSource =
+    "#version 330 core\n"
+    "in vec3 v_normal_worldspace;\n"
+    "uniform vec4 cubeColor;\n"
+    "out vec4 color;\n"
+    "void main() {\n"
+    "    vec3 lightDir = normalize(vec3(0.4, 1.0, 0.6));\n"
+    "    float diff = max(dot(normalize(v_normal_worldspace), lightDir), 0.0);\n"
+    "    float ambient = 0.45;\n"
+    "    float shade = ambient + (1.0 - ambient) * diff;\n"
+    "    color = vec4(cubeColor.rgb * shade, cubeColor.a);\n"
+    "}\n";
+
+// Constrói um cubo unitário (lado 1, centrado na origem) com posições e
+// normais, usado exclusivamente pelo shader de cor sólida acima.
+static void InitCubeSolid()
+{
+    if (g_CubeSolidInitialized)
+        return;
+
+    GLuint vertex_shader_id = glCreateShader(GL_VERTEX_SHADER);
+    const GLchar *vsrc = g_CubeSolidVertexShaderSource;
+    GLint vlen = (GLint)strlen(g_CubeSolidVertexShaderSource);
+    glShaderSource(vertex_shader_id, 1, &vsrc, &vlen);
+    glCompileShader(vertex_shader_id);
+
+    GLuint fragment_shader_id = glCreateShader(GL_FRAGMENT_SHADER);
+    const GLchar *fsrc = g_CubeSolidFragmentShaderSource;
+    GLint flen = (GLint)strlen(g_CubeSolidFragmentShaderSource);
+    glShaderSource(fragment_shader_id, 1, &fsrc, &flen);
+    glCompileShader(fragment_shader_id);
+
+    g_CubeSolidProgramID = glCreateProgram();
+    glAttachShader(g_CubeSolidProgramID, vertex_shader_id);
+    glAttachShader(g_CubeSolidProgramID, fragment_shader_id);
+    glLinkProgram(g_CubeSolidProgramID);
+
+    glDeleteShader(vertex_shader_id);
+    glDeleteShader(fragment_shader_id);
+
+    g_CubeSolidModelUniform = glGetUniformLocation(g_CubeSolidProgramID, "model");
+    g_CubeSolidViewUniform = glGetUniformLocation(g_CubeSolidProgramID, "view");
+    g_CubeSolidProjectionUniform = glGetUniformLocation(g_CubeSolidProgramID, "projection");
+    g_CubeSolidColorUniform = glGetUniformLocation(g_CubeSolidProgramID, "cubeColor");
+
+    float h = 0.5f;
+    float vertices[] = {
+        // posição (x,y,z,w)      // normal (x,y,z,w)
+        // front (+Z)
+        -h, -h, h, 1, 0, 0, 1, 0,
+        h, -h, h, 1, 0, 0, 1, 0,
+        h, h, h, 1, 0, 0, 1, 0,
+        h, h, h, 1, 0, 0, 1, 0,
+        -h, h, h, 1, 0, 0, 1, 0,
+        -h, -h, h, 1, 0, 0, 1, 0,
+        // back (-Z)
+        h, -h, -h, 1, 0, 0, -1, 0,
+        -h, -h, -h, 1, 0, 0, -1, 0,
+        -h, h, -h, 1, 0, 0, -1, 0,
+        -h, h, -h, 1, 0, 0, -1, 0,
+        h, h, -h, 1, 0, 0, -1, 0,
+        h, -h, -h, 1, 0, 0, -1, 0,
+        // left (-X)
+        -h, -h, -h, 1, -1, 0, 0, 0,
+        -h, -h, h, 1, -1, 0, 0, 0,
+        -h, h, h, 1, -1, 0, 0, 0,
+        -h, h, h, 1, -1, 0, 0, 0,
+        -h, h, -h, 1, -1, 0, 0, 0,
+        -h, -h, -h, 1, -1, 0, 0, 0,
+        // right (+X)
+        h, -h, h, 1, 1, 0, 0, 0,
+        h, -h, -h, 1, 1, 0, 0, 0,
+        h, h, -h, 1, 1, 0, 0, 0,
+        h, h, -h, 1, 1, 0, 0, 0,
+        h, h, h, 1, 1, 0, 0, 0,
+        h, -h, h, 1, 1, 0, 0, 0,
+        // top (+Y)
+        -h, h, h, 1, 0, 1, 0, 0,
+        h, h, h, 1, 0, 1, 0, 0,
+        h, h, -h, 1, 0, 1, 0, 0,
+        h, h, -h, 1, 0, 1, 0, 0,
+        -h, h, -h, 1, 0, 1, 0, 0,
+        -h, h, h, 1, 0, 1, 0, 0,
+        // bottom (-Y)
+        -h, -h, -h, 1, 0, -1, 0, 0,
+        h, -h, -h, 1, 0, -1, 0, 0,
+        h, -h, h, 1, 0, -1, 0, 0,
+        h, -h, h, 1, 0, -1, 0, 0,
+        -h, -h, h, 1, 0, -1, 0, 0,
+        -h, -h, -h, 1, 0, -1, 0, 0,
+    };
+
+    GLuint VBO;
+    glGenVertexArrays(1, &g_CubeSolidVAO);
+    glBindVertexArray(g_CubeSolidVAO);
+
+    glGenBuffers(1, &VBO);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    GLsizei stride = 8 * sizeof(float);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, stride, (void *)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void *)(4 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+
+    g_CubeSolidInitialized = true;
+}
+
+// Desenha um cubo unitário (escalado/posicionado pela matriz "model"
+// fornecida) com cor sólida RGBA, usando o shader 3D dedicado acima. As
+// matrizes "view" e "projection" devem ser as mesmas usadas para o resto da
+// cena, garantindo que o cubo apareça corretamente posicionado/ocluso.
+static void DrawSolidCube(const glm::mat4 &model, const glm::mat4 &view,
+                           const glm::mat4 &projection, float r, float g, float b, float a)
+{
+    InitCubeSolid();
+
+    glUseProgram(g_CubeSolidProgramID);
+    glUniformMatrix4fv(g_CubeSolidModelUniform, 1, GL_FALSE, glm::value_ptr(model));
+    glUniformMatrix4fv(g_CubeSolidViewUniform, 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(g_CubeSolidProjectionUniform, 1, GL_FALSE, glm::value_ptr(projection));
+    glUniform4f(g_CubeSolidColorUniform, r, g, b, a);
+
+    glBindVertexArray(g_CubeSolidVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
+    glBindVertexArray(0);
+    glUseProgram(0);
+}
+
+// Paleta de cores do boneco explorador (estilo voxel/blocky, sem usar
+// nenhuma marca ou personagem licenciado): pele, camisa cáqui, calça
+// marrom-escura, chapéu de explorador e uma lanterna cinza/amarela na mão.
+static const glm::vec3 kSkinColor = glm::vec3(0.86f, 0.65f, 0.49f);
+static const glm::vec3 kShirtColor = glm::vec3(0.42f, 0.50f, 0.27f);
+static const glm::vec3 kPantsColor = glm::vec3(0.30f, 0.22f, 0.14f);
+static const glm::vec3 kHatColor = glm::vec3(0.55f, 0.42f, 0.20f);
+static const glm::vec3 kBootColor = glm::vec3(0.18f, 0.13f, 0.10f);
+static const glm::vec3 kLanternBodyColor = glm::vec3(0.25f, 0.25f, 0.27f);
+static const glm::vec3 kLanternLightColor = glm::vec3(1.0f, 0.92f, 0.55f);
+
+// Desenha o personagem do jogador (boneco explorador) na posição/orientação
+// fornecidas, usando uma hierarquia simples de cubos (torso como "raiz",
+// cabeça/braços/pernas pendurados a partir dele). É a representação visual
+// da hitbox cúbica do jogador: aparece tanto em primeira pessoa (visto de
+// frente, ao colidir com objetos) quanto, mais importante, na visão de cima
+// (TAB), onde antes havia apenas um marcador esférico (removido).
+void DrawPlayerCharacter(glm::vec3 position, float yaw, const glm::mat4 &view, const glm::mat4 &projection)
+{
+    // Dimensões em unidades de mundo, calibradas para a hitbox do jogador
+    // (cubo de lado 2*g_PlayerHalfWidth) sem ultrapassá-la visualmente.
+    float totalHeight = 2.0f * g_PlayerHalfHeight; // pés ao topo da cabeça
+    float headSize = totalHeight * 0.22f;
+    float torsoHeight = totalHeight * 0.40f;
+    float torsoWidth = totalHeight * 0.34f;
+    float torsoDepth = totalHeight * 0.20f;
+    float legHeight = totalHeight * 0.38f;
+    float legWidth = torsoWidth * 0.42f;
+    float armHeight = torsoHeight * 0.95f;
+    float armWidth = legWidth * 0.85f;
+    float hatBrimHeight = headSize * 0.18f;
+    float hatTopHeight = headSize * 0.35f;
+
+    float feetY = position.y; // g_PlayerPosition.y já está no chão (g_GroundY)
+    float legCenterY = feetY + legHeight * 0.5f;
+    float torsoCenterY = feetY + legHeight + torsoHeight * 0.5f;
+    float headCenterY = feetY + legHeight + torsoHeight + headSize * 0.5f;
+
+    glm::mat4 baseModel = Matrix_Translate(position.x, 0.0f, position.z) * Matrix_Rotate_Y(yaw);
+
+    auto part = [&](float cx, float cy, float cz, float sx, float sy, float sz, glm::vec3 color)
+    {
+        glm::mat4 model = baseModel *
+                           Matrix_Translate(cx, cy, cz) *
+                           Matrix_Scale(sx, sy, sz);
+        DrawSolidCube(model, view, projection, color.r, color.g, color.b, 1.0f);
+    };
+
+    // Pernas (levemente separadas no eixo X local).
+    part(-legWidth * 0.55f, legCenterY, 0.0f, legWidth, legHeight, legWidth, kPantsColor);
+    part(legWidth * 0.55f, legCenterY, 0.0f, legWidth, legHeight, legWidth, kPantsColor);
+
+    // Botas (pequeno cubo escuro na base de cada perna).
+    float bootHeight = legHeight * 0.22f;
+    part(-legWidth * 0.55f, feetY + bootHeight * 0.5f, legWidth * 0.08f, legWidth * 1.05f, bootHeight, legWidth * 1.25f, kBootColor);
+    part(legWidth * 0.55f, feetY + bootHeight * 0.5f, legWidth * 0.08f, legWidth * 1.05f, bootHeight, legWidth * 1.25f, kBootColor);
+
+    // Torso (camisa).
+    part(0.0f, torsoCenterY, 0.0f, torsoWidth, torsoHeight, torsoDepth, kShirtColor);
+
+    // Braços (pele exposta abaixo de uma manga curta, simplificado como um
+    // único cubo cor de pele por braço, posicionados nas laterais do torso).
+    float armOffsetX = torsoWidth * 0.5f + armWidth * 0.5f;
+    part(-armOffsetX, torsoCenterY + torsoHeight * 0.05f, 0.0f, armWidth, armHeight, armWidth, kSkinColor);
+    part(armOffsetX, torsoCenterY + torsoHeight * 0.05f, 0.0f, armWidth, armHeight, armWidth, kSkinColor);
+
+    // Cabeça.
+    part(0.0f, headCenterY, 0.0f, headSize, headSize, headSize, kSkinColor);
+
+    // Chapéu de explorador: aba larga e achatada + "copa" mais estreita.
+    float hatBrimY = headCenterY + headSize * 0.5f + hatBrimHeight * 0.5f;
+    part(0.0f, hatBrimY, 0.0f, headSize * 1.5f, hatBrimHeight, headSize * 1.5f, kHatColor);
+    float hatTopY = hatBrimY + hatBrimHeight * 0.5f + hatTopHeight * 0.5f;
+    part(0.0f, hatTopY, 0.0f, headSize * 0.85f, hatTopHeight, headSize * 0.85f, kHatColor);
+
+    // Lanterna na mão direita (do ponto de vista do personagem): um pequeno
+    // cubo cinza (corpo) com uma face amarelo-claro (luz) na frente, presa
+    // à frente do braço direito, um pouco abaixo do ombro, como se o
+    // personagem a estivesse segurando esticada para frente.
+    float lanternSize = armWidth * 0.9f;
+    float lanternForward = torsoDepth * 0.5f + lanternSize * 0.6f;
+    float lanternY = torsoCenterY - torsoHeight * 0.15f;
+    part(armOffsetX, lanternY, lanternForward * 0.6f, lanternSize, lanternSize * 1.3f, lanternSize, kLanternBodyColor);
+    part(armOffsetX, lanternY, lanternForward * 0.6f + lanternSize * 0.55f, lanternSize * 0.7f, lanternSize * 0.7f, lanternSize * 0.35f, kLanternLightColor);
+}
+
+
 // para o painel de fundo da tela de fim de jogo). Implementado com um
 // programa de GPU próprio e bem simples (posição 2D em NDC + cor sólida),
 // seguindo o mesmo padrão usado por TextRendering_Init() em textrendering.cpp

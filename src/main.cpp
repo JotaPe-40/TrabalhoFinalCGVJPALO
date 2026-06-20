@@ -536,12 +536,14 @@ int main(int argc, char *argv[])
         glm::vec3 moveDelta = glm::vec3(0.0f, 0.0f, 0.0f);
 
         // Quando o jogo termina (jogador encostou no smile), o movimento do
-        // jogador é congelado: nenhuma tecla de movimento tem efeito. O
-        // mesmo vale para a visão de cima (TAB): ela troca apenas a câmera
-        // por uma câmera de espectador fixa olhando para baixo; o jogador
-        // (seu "boneco"/hitbox) permanece exatamente onde estava, sem se
-        // mover, enquanto essa visão estiver ativa.
-        bool inputEnabled = (g_GameState == GAME_PLAYING) && !g_TopView;
+        // jogador é congelado: nenhuma tecla de movimento tem efeito. A
+        // visão de cima (TAB) troca apenas a câmera, por uma câmera de
+        // espectador fixa olhando para baixo; o jogador continua podendo se
+        // mover normalmente com WASD enquanto essa visão estiver ativa (o
+        // movimento é relativo à direção que o personagem estava olhando
+        // antes de entrar na visão de cima, já que essa câmera não tem
+        // yaw/pitch próprios controláveis pelo mouse).
+        bool inputEnabled = (g_GameState == GAME_PLAYING);
 
         if (inputEnabled)
         {
@@ -2066,13 +2068,13 @@ void DrawColoredQuad2D(float x0, float y0, float x1, float y1, float r, float g,
 // globais g_RestartButton* para que MouseButtonCallback() detecte cliques.
 void DrawGameOverScreen(GLFWwindow *window, double elapsedSeconds)
 {
-    // Painel de fundo semitransparente sobre toda a tela.
-    DrawColoredQuad2D(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.65f);
+    // Painel de fundo (branco) sobre toda a tela.
+    DrawColoredQuad2D(-1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.65f);
 
-    // Painel sólido (opaco) atrás do bloco de título+subtítulo, garantindo
-    // legibilidade total do texto independente da textura da parede/teto
-    // que esteja por trás na cena 3D.
-    DrawColoredQuad2D(-0.62f, 0.0f, 0.62f, 0.34f, 0.05f, 0.05f, 0.05f, 0.92f);
+    // Painel sólido (opaco, branco) atrás do bloco de título+subtítulo,
+    // garantindo legibilidade total do texto (preto) independente da
+    // textura da parede/teto que esteja por trás na cena 3D.
+    DrawColoredQuad2D(-0.62f, 0.0f, 0.62f, 0.34f, 1.0f, 1.0f, 1.0f, 0.92f);
 
     int totalSeconds = (int)(elapsedSeconds + 0.5);
     int minutes = totalSeconds / 60;
@@ -2130,7 +2132,7 @@ void DrawGameOverScreen(GLFWwindow *window, double elapsedSeconds)
 
     // Dica adicional: tecla R também reinicia o jogo.
     std::string hint = "(ou pressione R)";
-    DrawColoredQuad2D(btnMinX - 0.02f, btnMinY - 0.16f, btnMaxX + 0.02f, btnMinY - 0.02f, 0.05f, 0.05f, 0.05f, 0.92f);
+    DrawColoredQuad2D(btnMinX - 0.02f, btnMinY - 0.16f, btnMaxX + 0.02f, btnMinY - 0.02f, 1.0f, 1.0f, 1.0f, 0.92f);
     TextRendering_PrintString(window, hint, btnMinX + 0.02f, btnMinY - 0.10f, 1.2f);
 }
 

@@ -79,7 +79,7 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 
 ### Instâncias de objetos
 
-<mark>`boneco steve do usuário, smile e ratos`</mark>
+<mark>`boneco explorador do usuário, smile e ratos`</mark>
 
 ### Testes de intersecção
 

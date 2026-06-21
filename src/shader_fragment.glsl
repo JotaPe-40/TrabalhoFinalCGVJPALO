@@ -26,6 +26,7 @@ uniform mat4 projection;
 #define TETO   4
 #define RAT    5
 uniform int object_id;
+uniform int c_top;
 
 // Parâmetros da axis-aligned bounding box (AABB) do modelo
 uniform vec4 bbox_min;
@@ -63,11 +64,14 @@ void main()
     // Normal do fragmento atual, interpolada pelo rasterizador a partir das
     // normais de cada vértice.
     vec4 n = normalize(normal);
+    int camera = c_top;
 
     // Vetor que define o sentido da fonte de luz em relação ao ponto atual.
     vec4 l = normalize(camera_position - p);
+    if (camera == 1) l = n;
 
     float intensity = max(0,(3.0 - length(camera_position - p))/3);
+    if (camera == 1) intensity = 1.0;
 
     // Vetor que define o sentido da câmera em relação ao ponto atual.
     vec4 v = normalize(camera_position - p);
@@ -155,8 +159,8 @@ void main()
         q = 1.0;
     }
     else if ( object_id == TETO ) {
-         vec2 uv = texcoords * TextureRepeat; 
-         Kd0 = texture(TextureImage2, uv).rgb;
+        vec2 uv = texcoords * TextureRepeat; 
+        Kd0 = texture(TextureImage2, uv).rgb;
         Ks = vec3(0.0,0.0,0.0);
         Ka = vec3(0.0,0.0,0.0);
         q = 1.0;
@@ -165,9 +169,9 @@ void main()
     {
         vec2 uvw = texcoords * TextureRepeat;
         Kd0 = texture(TextureImage0, uvw).rgb;
-        Ks = vec3(0.4,0.4,0.4);
-        Ka = vec3(0.2,0.2,0.2);
-        q = 18.0;
+        Ks = vec3(0.0,0.0,0.0);
+        Ka = vec3(0.0,0.0,0.0);
+        q = 1.0;
     }
 
     else if ( object_id == RAT )
@@ -185,7 +189,7 @@ void main()
 
         Kd0 = texture(TextureImage4, vec2(U,V) * TextureRepeat).rgb;
         Ks = vec3(0.0,0.0,0.0);
-        Ka = vec3(0.3,0.25,0.25);
+        Ka = vec3(0.3,0.3,0.3);
         q = 1.0;
     }
 
@@ -204,22 +208,6 @@ void main()
     // Termo especular utilizando o modelo de iluminação de Phong
     vec3 phong_specular_term  = Ks*I*pow(max(0,dot(r,v)),q); // PREENCH AQUI o termo especular de Phong
 
-    // NOTE: Se você quiser fazer o rendering de objetos transparentes, é
-    // necessário:
-    // 1) Habilitar a operação de "blending" de OpenGL logo antes de realizar o
-    //    desenho dos objetos transparentes, com os comandos abaixo no código C++:
-    //      glEnable(GL_BLEND);
-    //      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    // 2) Realizar o desenho de todos objetos transparentes *após* ter desenhado
-    //    todos os objetos opacos; e
-    // 3) Realizar o desenho de objetos transparentes ordenados de acordo com
-    //    suas distâncias para a câmera (desenhando primeiro objetos
-    //    transparentes que estão mais longe da câmera).
-    // Alpha default = 1 = 100% opaco = 0% transparente
-    color.a = 1;
-
-    // Cor final do fragmento calculada com uma combinação dos termos difuso,
-    // especular, e ambiente. Veja slide 129 do documento Aula_17_e_18_Modelos_de_Iluminacao.pdf.
     color.rgb = lambert_diffuse_term + ambient_term + phong_specular_term;
 
     // Cor final com correção gamma, considerando monitor sRGB.

@@ -65,7 +65,7 @@ void main()
     vec4 n = normalize(normal);
 
     // Vetor que define o sentido da fonte de luz em relação ao ponto atual.
-    vec4 l = normalize(vec4(1.0,1.0,0.0,0.0));
+    vec4 l = normalize(camera_position - p);
 
     // Vetor que define o sentido da câmera em relação ao ponto atual.
     vec4 v = normalize(camera_position - p);
@@ -74,8 +74,14 @@ void main()
     float U = 0.0;
     float V = 0.0;
 
+    //sentido da reflexão especular
+    vec4 r = normalize(-l + 2*n*dot(n,l));
+
 	// Coeficiente de refletância difusa
 	vec3 Kd0;
+    vec3 Ks; // Refletância especular
+    vec3 Ka; // Refletância ambiente
+    float q; // Expoente especular para o modelo de iluminação de Phong
 
     if ( object_id == SPHERE )
     {
@@ -104,6 +110,9 @@ void main()
 
 		// Obtemos a refletância difusa a partir da leitura da imagem TextureImage0
 		Kd0 = texture(TextureImage3, vec2(U,V)).rgb;
+        Ks = vec3(0.0,0.0,0.0);
+        Ka = vec3(0.0,0.0,0.0);
+        q = 1.0;
 
     }
     else if ( object_id == BUNNY )
@@ -131,20 +140,32 @@ void main()
 
 		// Obtemos a refletância difusa a partir da leitura da imagem TextureImage0
 		Kd0 = texture(TextureImage3, vec2(U,V)).rgb;
+        Ks = vec3(0.0,0.0,0.0);
+        Ka = vec3(0.0,0.0,0.0);
+        q = 1.0;
     }
     else if ( object_id == PLANE )
     {
         vec2 uv = texcoords * TextureRepeat;
         Kd0 = texture(TextureImage1, uv).rgb;
+        Ks = vec3(0.0,0.0,0.0);
+        Ka = vec3(0.0,0.0,0.0);
+        q = 1.0;
     }
     else if ( object_id == TETO ) {
          vec2 uv = texcoords * TextureRepeat; 
-         Kd0 = texture(TextureImage2, uv).rgb; 
+         Kd0 = texture(TextureImage2, uv).rgb;
+        Ks = vec3(0.0,0.0,0.0);
+        Ka = vec3(0.0,0.0,0.0);
+        q = 1.0;
     }
     else if ( object_id == WALL )
     {
         vec2 uvw = texcoords * TextureRepeat;
         Kd0 = texture(TextureImage0, uvw).rgb;
+        Ks = vec3(0.4,0.4,0.4);
+        Ka = vec3(0.2,0.2,0.2);
+        q = 18.0;
     }
 
     else if ( object_id == RAT )
@@ -161,11 +182,25 @@ void main()
         V = texcoords.y;
 
         Kd0 = texture(TextureImage4, vec2(U,V) * TextureRepeat).rgb;
+        Ks = vec3(0.0,0.0,0.0);
+        Ka = vec3(0.0,0.0,0.0);
+        q = 1.0;
     }
 
-    // Equação de Iluminação
-    float lambert = max(0,dot(n,l));
-    color.rgb = Kd0 * (0.5 + 0.5 * lambert);
+    // Espectro da fonte de iluminação
+    vec3 I = vec3(0.5,0.5,0.5); // PREENCH AQUI o espectro da fonte de luz
+
+    // Espectro da luz ambiente
+    vec3 Ia = vec3(0.2,0.2,0.2); // PREENCHA AQUI o espectro da luz ambiente
+
+    // Termo difuso utilizando a lei dos cossenos de Lambert
+    vec3 lambert_diffuse_term = Kd0 * I * max(0,dot(n,l)); // PREENCHA AQUI o termo difuso de Lambert
+
+    // Termo ambiente
+    vec3 ambient_term = Ka*Ia; // PREENCHA AQUI o termo ambiente
+
+    // Termo especular utilizando o modelo de iluminação de Phong
+    vec3 phong_specular_term  = Ks*I*pow(max(0,dot(r,v)),q); // PREENCH AQUI o termo especular de Phong
 
     // NOTE: Se você quiser fazer o rendering de objetos transparentes, é
     // necessário:
@@ -180,6 +215,10 @@ void main()
     //    transparentes que estão mais longe da câmera).
     // Alpha default = 1 = 100% opaco = 0% transparente
     color.a = 1;
+
+    // Cor final do fragmento calculada com uma combinação dos termos difuso,
+    // especular, e ambiente. Veja slide 129 do documento Aula_17_e_18_Modelos_de_Iluminacao.pdf.
+    color.rgb = lambert_diffuse_term + ambient_term + phong_specular_term;
 
     // Cor final com correção gamma, considerando monitor sRGB.
     // Veja https://en.wikipedia.org/w/index.php?title=Gamma_correction&oldid=751281772#Windows.2C_Mac.2C_sRGB_and_TV.2Fvideo_standard_gammas

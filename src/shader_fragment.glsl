@@ -26,11 +26,37 @@ uniform mat4 projection;
 #define TETO   4
 #define RAT    5
 uniform int object_id;
+
+// Verdadeiro (1) quando a câmera de cima (visão de espectador / TAB) está
+// ativa. Usado apenas para suavizar a iluminação na visão de cima (mais um
+// pouco de luz ambiente, já que a câmera fica longe de tudo e não faz
+// sentido depender só do alcance curto da lanterna nesse modo) - mas SEM
+// trocar completamente o modelo de iluminação, evitando qualquer "salto"
+// brusco de aparência ao alternar entre as duas câmeras.
 uniform int c_top;
 
 // Parâmetros da axis-aligned bounding box (AABB) do modelo
 uniform vec4 bbox_min;
 uniform vec4 bbox_max;
+
+// ===========================================================================
+// Iluminação: a fonte de luz principal da cena é a lanterna do personagem.
+// Sua posição (em coordenadas de mundo) é recalculada a cada quadro em
+// main() (função ComputeLanternPosition()) a partir da posição/orientação
+// atual do jogador, e enviada aqui.
+//
+// "light_visibility" é um valor CONTÍNUO entre 0.0 e 1.0 (não um booleano),
+// calculado individualmente para cada objeto desenhado (cada parede, cada
+// rato, o smile) em main.cpp (função ComputeLightVisibility()): em vez de
+// testar oclusão apenas no centro do objeto - o que causaria uma transição
+// abrupta, "tudo ou nada", entre uma parede iluminada e a parede vizinha
+// na sombra -, testamos vários pontos amostrados ao redor do objeto e
+// usamos a FRAÇÃO deles que a luz alcança. Perto da borda de uma sombra,
+// parte das amostras "vê" a luz e parte não, suavizando gradualmente a
+// transição em vez de cortar bruscamente.
+// ===========================================================================
+uniform vec4 light_position;
+uniform float light_visibility;
 
 // Variáveis para acesso das imagens de textura
 uniform sampler2D TextureImage0;
@@ -64,17 +90,18 @@ void main()
     // Normal do fragmento atual, interpolada pelo rasterizador a partir das
     // normais de cada vértice.
     vec4 n = normalize(normal);
-    int camera = c_top;
 
-    // Vetor que define o sentido da fonte de luz em relação ao ponto atual.
-    vec4 l = normalize(camera_position - p);
-    if (camera == 1) l = n;
-
-    float intensity = max(0,(3.0 - length(camera_position - p))/3);
-    if (camera == 1) intensity = 1.0;
+    // Vetor que define o sentido da fonte de luz (a lanterna do personagem)
+    // em relação ao ponto atual.
+    vec4 l = normalize(light_position - p);
 
     // Vetor que define o sentido da câmera em relação ao ponto atual.
     vec4 v = normalize(camera_position - p);
+
+    // Distância entre a lanterna e o ponto atual, usada para a atenuação
+    // da luz com a distância (uma lanterna real ilumina menos quanto mais
+    // longe o objeto está, e tem um alcance limitado).
+    float light_distance = length(light_position - p);
 
     // Coordenadas de textura U e V
     float U = 0.0;
@@ -88,22 +115,13 @@ void main()
     vec3 Ks; // Refletância especular
     vec3 Ka; // Refletância ambiente
     float q; // Expoente especular para o modelo de iluminação de Phong
+    vec3 Ke = vec3(0.0,0.0,0.0); // Emissão própria (luz própria do objeto, independente de qualquer fonte de luz externa)
 
     if ( object_id == SPHERE )
     {
-        // PREENCHA AQUI as coordenadas de textura da esfera, computadas com
-        // projeção esférica EM COORDENADAS DO MODELO. Utilize como referência
-        // o slides 134-150 do documento Aula_20_Mapeamento_de_Texturas.pdf.
-        // A esfera que define a projeção deve estar centrada na posição
-        // "bbox_center" definida abaixo.
-
-        // Você deve utilizar:
-        //   função 'length( )' : comprimento Euclidiano de um vetor
-        //   função 'atan( , )' : arcotangente. Veja https://en.wikipedia.org/wiki/Atan2.
-        //   função 'asin( )'   : seno inverso.
-        //   constante M_PI
-        //   variável position_model
-
+        // Coordenadas de textura do "smile", computadas com projeção
+        // esférica em coordenadas do modelo (a esfera de projeção está
+        // centrada em "bbox_center", o centro da bounding box do objeto).
         vec4 bbox_center = (bbox_min + bbox_max) / 2.0;
         vec4 d = position_model - bbox_center;
 
@@ -114,40 +132,37 @@ void main()
         U = (theta + M_PI) / 2.0 / M_PI;
         V = (phi + M_PI_2) / M_PI;
 
-		// Obtemos a refletância difusa a partir da leitura da imagem TextureImage0
+		// Obtemos a refletância difusa a partir da leitura da imagem TextureImage3
 		Kd0 = texture(TextureImage3, vec2(U,V)).rgb;
-        Ks = vec3(0.0,0.0,0.0);
-        Ka = vec3(0.0,0.0,0.0);
-        q = 1.0;
+        // O smile é um objeto "auto-iluminado" (como se brilhasse com luz
+        // própria, marcando visualmente o objetivo do jogador mesmo a
+        // distância, inclusive nas partes na sombra ou ocluídas por
+        // paredes): usamos um termo de EMISSÃO PRÓPRIA (Ke), que é somado
+        // à cor final independente de qualquer luz externa - diferente de
+        // Ka, que só tem efeito multiplicado pela luz ambiente da cena
+        // (Ia), que é deliberadamente bem baixa para o resto do labirinto
+        // ficar escuro fora do alcance da lanterna.
+        Ks = vec3(0.3,0.3,0.2);
+        Ka = vec3(0.10,0.10,0.06);
+        Ke = Kd0 * 0.55;
+        q = 32.0;
 
     }
     else if ( object_id == BUNNY )
     {
-        // PREENCHA AQUI as coordenadas de textura do coelho, computadas com
-        // projeção planar XY em COORDENADAS DO MODELO. Utilize como referência
-        // o slides 99-104 do documento Aula_20_Mapeamento_de_Texturas.pdf,
-        // e também use as variáveis min*/max* definidas abaixo para normalizar
-        // as coordenadas de textura U e V dentro do intervalo [0,1]. Para
-        // tanto, veja por exemplo o mapeamento da variável 'p_v' utilizando
-        // 'h' no slides 158-160 do documento Aula_20_Mapeamento_de_Texturas.pdf.
-        // Veja também a Questão 4 do Questionário 4 no Moodle.
-
         float minx = bbox_min.x;
         float maxx = bbox_max.x;
 
         float miny = bbox_min.y;
         float maxy = bbox_max.y;
 
-        float minz = bbox_min.z;
-        float maxz = bbox_max.z;
-
         U = (position_model.x - minx) / (maxx - minx);
         V = (position_model.y - miny) / (maxy - miny);
 
-		// Obtemos a refletância difusa a partir da leitura da imagem TextureImage0
+		// Obtemos a refletância difusa a partir da leitura da imagem TextureImage3
 		Kd0 = texture(TextureImage3, vec2(U,V)).rgb;
         Ks = vec3(0.0,0.0,0.0);
-        Ka = vec3(0.0,0.0,0.0);
+        Ka = Kd0 * 0.15;
         q = 1.0;
     }
     else if ( object_id == PLANE )
@@ -155,23 +170,29 @@ void main()
         vec2 uv = texcoords * TextureRepeat;
         Kd0 = texture(TextureImage1, uv).rgb;
         Ks = vec3(0.0,0.0,0.0);
-        Ka = vec3(0.0,0.0,0.0);
+        // Refletância ambiente baixa, proporcional à própria textura: o
+        // chão longe da lanterna fica bem escuro (quase preto), mas ainda
+        // com um resquício de cor para não desaparecer completamente.
+        Ka = Kd0 * 0.06;
         q = 1.0;
     }
     else if ( object_id == TETO ) {
-        vec2 uv = texcoords * TextureRepeat; 
-        Kd0 = texture(TextureImage2, uv).rgb;
+         vec2 uv = texcoords * TextureRepeat; 
+         Kd0 = texture(TextureImage2, uv).rgb;
         Ks = vec3(0.0,0.0,0.0);
-        Ka = vec3(0.0,0.0,0.0);
+        Ka = Kd0 * 0.06;
         q = 1.0;
     }
     else if ( object_id == WALL )
     {
         vec2 uvw = texcoords * TextureRepeat;
         Kd0 = texture(TextureImage0, uvw).rgb;
-        Ks = vec3(0.0,0.0,0.0);
-        Ka = vec3(0.0,0.0,0.0);
-        q = 1.0;
+        Ks = vec3(0.15,0.15,0.15);
+        // Mesma ideia do chão/teto: as paredes ficam bem escuras fora do
+        // alcance da lanterna, mas não 100% pretas (mantendo um mínimo de
+        // legibilidade da geometria do labirinto).
+        Ka = Kd0 * 0.08;
+        q = 18.0;
     }
 
     else if ( object_id == RAT )
@@ -188,30 +209,75 @@ void main()
         V = texcoords.y;
 
         Kd0 = texture(TextureImage4, vec2(U,V) * TextureRepeat).rgb;
-        Ks = vec3(0.0,0.0,0.0);
-        Ka = vec3(0.3,0.3,0.3);
-        q = 1.0;
+        Ks = vec3(0.05,0.05,0.05);
+        // Refletância ambiente proporcional à própria textura de pelagem:
+        // evita que partes do corpo do rato cuja normal não aponte para a
+        // lanterna fiquem completamente pretas.
+        Ka = Kd0 * 0.35;
+        q = 4.0;
     }
 
-    // Espectro da fonte de iluminação
-    vec3 I = vec3(intensity,intensity,intensity); // PREENCH AQUI o espectro da fonte de luz
+    // Espectro da fonte de iluminação (a lanterna do personagem).
+    vec3 I = vec3(1.4,1.3,1.0);
 
-    // Espectro da luz ambiente
-    vec3 Ia = vec3(intensity*0.2,intensity*0.2,intensity*0.2); // PREENCHA AQUI o espectro da luz ambiente
+    // Espectro da luz ambiente global da cena: bem baixo, para que o
+    // labirinto fique escuro fora do alcance da lanterna (mas as
+    // contribuições de Ka/Kd0 acima ainda dão um mínimo de visibilidade).
+    // Na visão de cima (c_top == 1), aumentamos um pouco esse ambiente -
+    // já que a câmera de espectador fica bem mais distante de tudo, e o
+    // labirinto inteiro precisa ficar pelo menos minimamente visível para
+    // servir como um "mapa" - mas sem desligar a atenuação/oclusão da
+    // lanterna, evitando qualquer salto brusco de aparência ao alternar
+    // entre as duas câmeras.
+    vec3 Ia = (c_top == 1) ? vec3(0.0005,0.0005,0.001) : vec3(0.01,0.01,0.02);
 
-    // Termo difuso utilizando a lei dos cossenos de Lambert
-    vec3 lambert_diffuse_term = Kd0 * I * max(0,dot(n,l)); // PREENCHA AQUI o termo difuso de Lambert
+    // Atenuação da luz da lanterna com a distância (modelo físico simples
+    // de atenuação quadrática-linear, comum em jogos): quanto mais longe o
+    // objeto está da lanterna, mais fraca a luz que o atinge. Os
+    // coeficientes foram calibrados para que a luz alcance bem uma ou duas
+    // células do labirinto à frente do personagem, e praticamente se
+    // apague depois disso.
+    float attenuation = 1.0 / (1.0 + 0.25 * light_distance + 0.20 * light_distance * light_distance);
 
-    // Termo ambiente
-    vec3 ambient_term = Ka*Ia; // PREENCHA AQUI o termo ambiente
+    // "light_visibility" (0.0 a 1.0, calculado por amostragem múltipla em
+    // main.cpp) multiplica a atenuação: quando uma parede do labirinto
+    // bloqueia parcial ou totalmente a linha entre a lanterna e este
+    // objeto, a luz direta é reduzida proporcionalmente - suavizando a
+    // transição para a penumbra em vez de simplesmente ligar/desligar.
+    attenuation *= light_visibility;
 
-    // Termo especular utilizando o modelo de iluminação de Phong
-    vec3 phong_specular_term  = Ks*I*pow(max(0,dot(r,v)),q); // PREENCH AQUI o termo especular de Phong
+    // Termo difuso utilizando a lei dos cossenos de Lambert, com a
+    // intensidade da luz já atenuada pela distância e pela visibilidade.
+    vec3 lambert_diffuse_term = Kd0 * I * attenuation * max(0,dot(n,l));
 
-    color.rgb = lambert_diffuse_term + ambient_term + phong_specular_term;
+    // Termo ambiente: luz ambiente global da cena, multiplicada pela
+    // refletância ambiente do material de cada objeto.
+    vec3 ambient_term = Ka*Ia;
+
+    // Termo especular utilizando o modelo de iluminação de Phong, também
+    // atenuado pela distância/visibilidade da lanterna.
+    vec3 phong_specular_term  = Ks*I*attenuation*pow(max(0,dot(r,v)),q);
+
+    // NOTE: Se você quiser fazer o rendering de objetos transparentes, é
+    // necessário:
+    // 1) Habilitar a operação de "blending" de OpenGL logo antes de realizar o
+    //    desenho dos objetos transparentes, com os comandos abaixo no código C++:
+    //      glEnable(GL_BLEND);
+    //      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // 2) Realizar o desenho de todos objetos transparentes *após* ter desenhado
+    //    todos os objetos opacos; e
+    // 3) Realizar o desenho de objetos transparentes ordenados de acordo com
+    //    suas distâncias para a câmera (desenhando primeiro objetos
+    //    transparentes que estão mais longe da câmera).
+    // Alpha default = 1 = 100% opaco = 0% transparente
+    color.a = 1;
+
+    // Cor final do fragmento calculada com uma combinação dos termos difuso,
+    // especular, ambiente, e emissivo (luz própria, usada apenas pelo
+    // "smile"). Veja slide 129 do documento Aula_17_e_18_Modelos_de_Iluminacao.pdf.
+    color.rgb = lambert_diffuse_term + ambient_term + phong_specular_term + Ke;
 
     // Cor final com correção gamma, considerando monitor sRGB.
     // Veja https://en.wikipedia.org/w/index.php?title=Gamma_correction&oldid=751281772#Windows.2C_Mac.2C_sRGB_and_TV.2Fvideo_standard_gammas
     color.rgb = pow(color.rgb, vec3(1.0,1.0,1.0)/2.2);
 } 
-

@@ -67,6 +67,8 @@ void main()
     // Vetor que define o sentido da fonte de luz em relação ao ponto atual.
     vec4 l = normalize(camera_position - p);
 
+    float intensity = max(0,(3.0 - length(camera_position - p))/3);
+
     // Vetor que define o sentido da câmera em relação ao ponto atual.
     vec4 v = normalize(camera_position - p);
 
@@ -183,15 +185,15 @@ void main()
 
         Kd0 = texture(TextureImage4, vec2(U,V) * TextureRepeat).rgb;
         Ks = vec3(0.0,0.0,0.0);
-        Ka = vec3(0.0,0.0,0.0);
+        Ka = vec3(0.3,0.25,0.25);
         q = 1.0;
     }
 
     // Espectro da fonte de iluminação
-    vec3 I = vec3(0.5,0.5,0.5); // PREENCH AQUI o espectro da fonte de luz
+    vec3 I = vec3(intensity,intensity,intensity); // PREENCH AQUI o espectro da fonte de luz
 
     // Espectro da luz ambiente
-    vec3 Ia = vec3(0.2,0.2,0.2); // PREENCHA AQUI o espectro da luz ambiente
+    vec3 Ia = vec3(intensity*0.2,intensity*0.2,intensity*0.2); // PREENCHA AQUI o espectro da luz ambiente
 
     // Termo difuso utilizando a lei dos cossenos de Lambert
     vec3 lambert_diffuse_term = Kd0 * I * max(0,dot(n,l)); // PREENCHA AQUI o termo difuso de Lambert

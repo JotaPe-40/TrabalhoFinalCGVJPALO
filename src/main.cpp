@@ -528,6 +528,9 @@ int main(int argc, char *argv[])
         // os shaders de vértice e fragmentos).
         glUseProgram(g_GpuProgramID);
 
+        GLint boolLocation = glGetUniformLocation(g_GpuProgramID, "c_top");
+        glUniform1i(boolLocation, g_TopView ? 1 : 0);
+
         // Compute delta time
         double currentTime = glfwGetTime();
         float dt = (float)(currentTime - lastTime);

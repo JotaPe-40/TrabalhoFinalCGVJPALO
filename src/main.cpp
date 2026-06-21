@@ -158,6 +158,8 @@ void PrintObjModelInfo(ObjModel *);                                          // 
 
 // NOSSAS FUNÇÕES: ratos, colisão jogador-smile e tela de fim de jogo.
 glm::vec3 ComputeSmilePosition();                                   // Posição (mundo) do centro do smile na célula configurada
+glm::vec3 ComputeLanternPosition();                                  // Posição (mundo) da lanterna do personagem, fonte de luz da cena
+bool LightReachesPoint(glm::vec3 lightPos, glm::vec3 targetPos);     // Testa se alguma parede do labirinto bloqueia a luz entre a lanterna e um ponto
 void RandomizeStartAndGoalCells();                                   // Sorteia células (distintas) para o jogador e o smile, e regenera o labirinto a partir da célula do jogador
 void SpawnRats();                                                   // Cria/recria os ratinhos em posições aleatórias válidas
 glm::vec3 RandomPointInsideMaze(std::mt19937 &rng);                 // Sorteia um ponto de mundo dentro do labirinto
@@ -330,6 +332,8 @@ GLint g_object_id_uniform;
 GLint g_bbox_min_uniform;
 GLint g_bbox_max_uniform;
 GLint g_texture_repeat_uniform;
+GLint g_light_position_uniform; // posição da fonte de luz (lanterna do personagem) em coordenadas de mundo
+GLint g_light_occluded_uniform; // 1 se uma parede do labirinto bloqueia a luz para o objeto desenhado, 0 caso contrário
 
 // Número de texturas carregadas pela função LoadTextureImage()
 GLuint g_NumLoadedTextures = 0;
@@ -730,6 +734,15 @@ int main(int argc, char *argv[])
         glUniformMatrix4fv(g_view_uniform, 1, GL_FALSE, glm::value_ptr(view));
         glUniformMatrix4fv(g_projection_uniform, 1, GL_FALSE, glm::value_ptr(projection));
 
+        // A ÚNICA fonte de luz da cena é a lanterna do personagem. Sua
+        // posição (mundo) é recalculada a cada frame a partir da posição e
+        // orientação atuais do jogador, e enviada ao shader (usada para o
+        // termo difuso/especular com atenuação por distância). A oclusão
+        // por paredes (g_light_occluded_uniform) é decidida individualmente
+        // antes de cada DrawVirtualObject(), mais abaixo.
+        glm::vec3 lanternPos = ComputeLanternPosition();
+        glUniform4f(g_light_position_uniform, lanternPos.x, lanternPos.y, lanternPos.z, 1.0f);
+
 #define SPHERE 0
 #define PLANE 2
 #define WALL 3
@@ -744,6 +757,7 @@ int main(int argc, char *argv[])
 
         glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
         glUniform1i(g_object_id_uniform, PLANE);
+        glUniform1i(g_light_occluded_uniform, 0);
 
         if (g_texture_repeat_uniform != -1)
             glUniform1f(g_texture_repeat_uniform, mazeW);
@@ -773,6 +787,8 @@ int main(int argc, char *argv[])
         glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
         glUniform1i(g_object_id_uniform, SPHERE);
 
+        glUniform1i(g_light_occluded_uniform, LightReachesPoint(lanternPos, g_SmileCenter) ? 0 : 1);
+
         DrawVirtualObject("the_sphere");
 
         // Teto
@@ -784,6 +800,7 @@ int main(int argc, char *argv[])
 
             glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
             glUniform1i(g_object_id_uniform, TETO);
+            glUniform1i(g_light_occluded_uniform, 0);
 
             if (g_texture_repeat_uniform != -1)
                 glUniform1f(g_texture_repeat_uniform, mazeW);
@@ -819,6 +836,10 @@ int main(int argc, char *argv[])
                         Matrix_Translate(x, g_GroundY + wallHeight / 2.0f, z) * Matrix_Scale(cellSize, wallHeight, wallThickness);
 
                     glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(wm));
+
+                    glm::vec3 wallCenter = glm::vec3(x, g_GroundY + wallHeight / 2.0f, z);
+                    glUniform1i(g_light_occluded_uniform, LightReachesPoint(lanternPos, wallCenter) ? 0 : 1);
+
                     DrawVirtualObject("wall_cube");
                 }
             }
@@ -841,6 +862,10 @@ int main(int argc, char *argv[])
                         Matrix_Translate(x, g_GroundY + wallHeight / 2.0f, z) * Matrix_Scale(wallThickness, wallHeight, cellSize);
 
                     glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(wm));
+
+                    glm::vec3 wallCenter = glm::vec3(x, g_GroundY + wallHeight / 2.0f, z);
+                    glUniform1i(g_light_occluded_uniform, LightReachesPoint(lanternPos, wallCenter) ? 0 : 1);
+
                     DrawVirtualObject("wall_cube");
                 }
             }
@@ -861,6 +886,7 @@ int main(int argc, char *argv[])
                 Matrix_Scale(g_RatScale, g_RatScale, g_RatScale);
 
             glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
+            glUniform1i(g_light_occluded_uniform, LightReachesPoint(lanternPos, rat.position) ? 0 : 1);
             DrawVirtualObject("the_rat");
         }
 
@@ -1178,6 +1204,8 @@ void LoadShadersFromFiles()
     g_object_id_uniform = glGetUniformLocation(g_GpuProgramID, "object_id");   // Variável "object_id" em shader_fragment.glsl
     g_bbox_min_uniform = glGetUniformLocation(g_GpuProgramID, "bbox_min");
     g_bbox_max_uniform = glGetUniformLocation(g_GpuProgramID, "bbox_max");
+    g_light_position_uniform = glGetUniformLocation(g_GpuProgramID, "light_position");
+    g_light_occluded_uniform = glGetUniformLocation(g_GpuProgramID, "light_occluded");
 
     // Variáveis em "shader_fragment.glsl" para acesso das imagens de textura
     glUseProgram(g_GpuProgramID);
@@ -1499,6 +1527,59 @@ glm::vec3 ComputeSmilePosition()
     float sphereX = (g_SphereCol - mazeW / 2.0f + 0.5f) * cellSize;
     float sphereZ = (g_SphereRow - mazeH / 2.0f + 0.5f) * cellSize;
     return glm::vec3(sphereX, g_GroundY + 0.4f, sphereZ);
+}
+
+// Retorna a posição (mundo) da lanterna do personagem: a ÚNICA fonte de luz
+// da cena. Calculada a partir da posição/orientação do jogador, com um
+// pequeno deslocamento para a frente e para a direita (simulando a mão
+// direita estendida, na mesma posição usada para desenhar a geometria da
+// lanterna em DrawPlayerCharacter), e na altura aproximada da mão/peito.
+glm::vec3 ComputeLanternPosition()
+{
+    // Direção "para frente" do personagem, derivada do mesmo yaw usado pela
+    // câmera (ver cálculo de "front3" no laço principal): com pitch = 0, a
+    // direção é (sin(yaw), 0, cos(yaw)).
+    glm::vec3 forward = glm::vec3(sinf(g_PlayerYaw), 0.0f, cosf(g_PlayerYaw));
+    glm::vec3 right = glm::vec3(cosf(g_PlayerYaw), 0.0f, -sinf(g_PlayerYaw));
+
+    float forwardOffset = 0.35f;
+    float rightOffset = 0.22f;
+    float lanternHeight = g_GroundY + g_PlayerEyeHeight * 0.75f;
+
+    return g_PlayerPosition + forward * forwardOffset + right * rightOffset + glm::vec3(0.0f, lanternHeight - g_PlayerPosition.y, 0.0f);
+}
+
+// Testa se a luz da lanterna alcança um determinado ponto do mundo "em
+// linha reta", ou se alguma parede do labirinto está no caminho. Usado
+// para fazer as paredes do labirinto bloquearem a luz: cada objeto da cena
+// (cada parede individual, cada rato, o smile) é desenhado com a luz
+// "desligada" (ver g_light_occluded_uniform) caso esta função retorne
+// falso para a posição daquele objeto, mesmo que ele esteja dentro do
+// alcance/raio de iluminação da lanterna.
+bool LightReachesPoint(glm::vec3 lightPos, glm::vec3 targetPos)
+{
+    glm::vec3 toTarget = targetPos - lightPos;
+    toTarget.y = 0.0f;
+
+    float distance = glm::length(toTarget);
+    if (distance < 1e-4f)
+        return true;
+
+    // Amostra pontos ao longo do segmento luz->objeto, testando cada um
+    // contra MazeCollides (mesma técnica usada em IsRatVisibleToPlayer).
+    const float kStepSize = 0.12f;
+    int numSteps = (int)(distance / kStepSize);
+    numSteps = glm::clamp(numSteps, 1, 200);
+
+    for (int i = 1; i < numSteps; i++)
+    {
+        float t = (float)i / (float)numSteps;
+        glm::vec3 samplePoint = lightPos + toTarget * t;
+        if (MazeCollides(samplePoint.x, samplePoint.z, 0.02f, 0.02f))
+            return false;
+    }
+
+    return true;
 }
 
 // Sorteia uma célula aleatória para o jogador nascer, regenera o labirinto

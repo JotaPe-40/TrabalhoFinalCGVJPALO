@@ -256,7 +256,7 @@ void main()
     // servir como um "mapa" - mas sem desligar a atenuação/oclusão da
     // lanterna, evitando qualquer salto brusco de aparência ao alternar
     // entre as duas câmeras.
-    vec3 Ia = (c_top == 1) ? vec3(0.0005,0.0005,0.001) : vec3(0.01,0.01,0.02);
+    vec3 Ia = (c_top == 1) ? vec3(0.22,0.22,0.24) : vec3(0.06,0.06,0.08);
 
     // Atenuação da luz da lanterna com a distância (modelo físico simples
     // de atenuação quadrática-linear, comum em jogos): quanto mais longe o
@@ -264,7 +264,7 @@ void main()
     // coeficientes foram calibrados para que a luz alcance bem uma ou duas
     // células do labirinto à frente do personagem, e praticamente se
     // apague depois disso.
-    float attenuation = 1.0 / (1.0 + 0.25 * light_distance + 0.20 * light_distance * light_distance);
+    float attenuation = 1.0 / (1.0 + 0.55 * light_distance + 0.40 * light_distance * light_distance);
 
     // "light_visibility" (0.0 a 1.0, calculado por amostragem múltipla em
     // main.cpp) multiplica a atenuação: quando uma parede do labirinto

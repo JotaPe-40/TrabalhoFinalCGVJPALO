@@ -3,6 +3,10 @@
 #include <random>
 #include <ctime>
 #include <cmath>
+#include <algorithm>
+#include <queue>
+#include <limits>
+#include <cstdint>
 
 const int mazeW = 7;
 const int mazeH = 7;
@@ -13,6 +17,21 @@ const float wallHeight = 1.0f;
 std::vector<std::vector<int>> wallHorz;
 std::vector<std::vector<int>> wallVert;
 
+std::vector<std::vector<int>> wallHorzIsGlobe;
+std::vector<std::vector<int>> wallVertIsGlobe;
+
+// Taxa-alvo de spawn de paredes "globo": ~18% das paredes do labirinto.
+// Mantida bem abaixo de 0.5 para que o labirinto sempre tenha mais paredes
+// "brick" do que "globo" (requisito explícito), mesmo antes de aplicar a
+// regra de espaçamento mínimo abaixo (que só reduz esse número, nunca
+// aumenta).
+const float kGlobeWallSpawnRate = 0.18f;
+
+// Exige pelo menos 2 paredes "brick" entre quaisquer duas paredes "globo" ao
+// longo da cadeia de paredes adjacentes (paredes que se tocam por um canto
+// comum do grid).
+const int kMinBrickWallsBetweenGlobeWalls = 2;
+
 bool g_OnlyBorderWalls = false;
 
 void GenerateMaze(int startRow, int startCol)
@@ -21,6 +40,14 @@ void GenerateMaze(int startRow, int startCol)
 
     wallHorz = std::vector<std::vector<int>>(mazeH + 1, std::vector<int>(mazeW, 1));
     wallVert = std::vector<std::vector<int>>(mazeH, std::vector<int>(mazeW + 1, 1));
+
+    // As marcações de textura "globo" são recalculadas do zero a cada novo
+    // labirinto (ver AssignWallTextures(), chamada separadamente por quem
+    // gera o labirinto): aqui só garantimos que as matrizes já existem com o
+    // tamanho certo e sem nenhuma parede globo, para o caso de o labirinto
+    // ser desenhado antes da primeira chamada a AssignWallTextures().
+    wallHorzIsGlobe = std::vector<std::vector<int>>(mazeH + 1, std::vector<int>(mazeW, 0));
+    wallVertIsGlobe = std::vector<std::vector<int>>(mazeH, std::vector<int>(mazeW + 1, 0));
 
     std::vector<std::pair<int, int>> stack;
 
@@ -92,6 +119,166 @@ void GenerateMaze(int startRow, int startCol)
 
         visited[nr][nc] = 1;
         stack.emplace_back(nr, nc);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Texturas de parede (brick x globo)
+// ---------------------------------------------------------------------------
+//
+// Cada parede existente é identificada por um "ID de parede" simples: as
+// paredes horizontais vêm primeiro (varrendo wallHorz linha a linha), depois
+// as verticais (varrendo wallVert linha a linha). Cada parede também sabe os
+// dois cantos do grid que ela ocupa (em coordenadas inteiras de canto, de
+// (0,0) a (mazeH,mazeW)); duas paredes são consideradas "adjacentes" quando
+// compartilham um desses cantos - é essa noção de adjacência que usamos para
+// medir "quantas paredes existem entre" duas paredes globo, via BFS.
+namespace
+{
+    struct WallRef
+    {
+        bool isHorz; // true = wallHorz[i][j], false = wallVert[i][j]
+        int i, j;
+        int cornerR0, cornerC0; // primeiro canto ocupado pela parede
+        int cornerR1, cornerC1; // segundo canto ocupado pela parede
+    };
+} // namespace
+
+void AssignWallTextures()
+{
+    wallHorzIsGlobe = std::vector<std::vector<int>>(mazeH + 1, std::vector<int>(mazeW, 0));
+    wallVertIsGlobe = std::vector<std::vector<int>>(mazeH, std::vector<int>(mazeW + 1, 0));
+
+    // 1) Coleta todas as paredes que de fato existem no labirinto atual.
+    std::vector<WallRef> walls;
+
+    for (int i = 0; i <= mazeH; i++)
+        for (int j = 0; j < mazeW; j++)
+            if (wallHorz[i][j])
+                walls.push_back(WallRef{true, i, j, i, j, i, j + 1});
+
+    for (int i = 0; i < mazeH; i++)
+        for (int j = 0; j <= mazeW; j++)
+            if (wallVert[i][j])
+                walls.push_back(WallRef{false, i, j, i, j, i + 1, j});
+
+    int totalWalls = (int)walls.size();
+    if (totalWalls == 0)
+        return;
+
+    // 2) Constrói a lista de adjacência entre paredes (compartilham um
+    // canto). Como o número de paredes é pequeno (labirinto W x H), um
+    // algoritmo O(N^2) é suficiente e mantém o código simples.
+    std::vector<std::vector<int>> adjacency(totalWalls);
+    for (int a = 0; a < totalWalls; a++)
+    {
+        for (int b = a + 1; b < totalWalls; b++)
+        {
+            const WallRef &wa = walls[a];
+            const WallRef &wb = walls[b];
+
+            bool shareCorner =
+                (wa.cornerR0 == wb.cornerR0 && wa.cornerC0 == wb.cornerC0) ||
+                (wa.cornerR0 == wb.cornerR1 && wa.cornerC0 == wb.cornerC1) ||
+                (wa.cornerR1 == wb.cornerR0 && wa.cornerC1 == wb.cornerC0) ||
+                (wa.cornerR1 == wb.cornerR1 && wa.cornerC1 == wb.cornerC1);
+
+            if (shareCorner)
+            {
+                adjacency[a].push_back(b);
+                adjacency[b].push_back(a);
+            }
+        }
+    }
+
+    // 3) Distância mínima (em número de "saltos" parede-a-parede) de cada
+    // parede até a parede globo mais próxima já escolhida. Usada para
+    // impedir que duas paredes globo fiquem mais próximas do que o
+    // espaçamento mínimo exigido. Começa em "infinito" (nenhuma parede globo
+    // escolhida ainda).
+    const int kInfinity = std::numeric_limits<int>::max();
+    std::vector<int> distToNearestGlobe(totalWalls, kInfinity);
+
+    // Uma parede só pode se tornar globo se sua distância até a parede globo
+    // mais próxima for maior que kMinBrickWallsBetweenGlobeWalls: por
+    // exemplo, com o mínimo padrão de 2 paredes brick entre paredes globo,
+    // só aceitamos uma nova parede globo a uma distância >= 3 saltos de
+    // qualquer parede globo já escolhida (2 paredes brick no meio do
+    // caminho + 1 salto final até a nova parede globo).
+    const int kMinHopDistance = kMinBrickWallsBetweenGlobeWalls + 1;
+
+    // 4) Número máximo de paredes globo permitido pela taxa de spawn
+    // configurada, sempre arredondado para baixo e nunca permitindo que
+    // paredes globo sejam maioria (garante mais brick do que globo mesmo em
+    // labirintos muito pequenos).
+    int maxGlobeWallsByRate = (int)std::floor(totalWalls * kGlobeWallSpawnRate);
+    int maxGlobeWallsByMajority = (totalWalls - 1) / 2; // estritamente menos da metade
+    int maxGlobeWalls = std::min(maxGlobeWallsByRate, maxGlobeWallsByMajority);
+    maxGlobeWalls = std::max(maxGlobeWalls, 0);
+
+    if (maxGlobeWalls == 0)
+        return;
+
+    // 5) Sorteia a ORDEM em que as paredes são consideradas como candidatas
+    // a globo (em vez de sempre testar na mesma ordem geométrica), para que
+    // o conjunto final de paredes globo varie entre labirintos/partidas.
+    std::vector<int> order(totalWalls);
+    for (int k = 0; k < totalWalls; k++)
+        order[k] = k;
+
+    std::mt19937 rng((unsigned)time(NULL) ^ (unsigned)(uintptr_t)&walls);
+    std::shuffle(order.begin(), order.end(), rng);
+
+    int globeCount = 0;
+
+    for (int idx : order)
+    {
+        if (globeCount >= maxGlobeWalls)
+            break;
+
+        if (distToNearestGlobe[idx] <= kMinHopDistance)
+            continue; // muito perto (em saltos) de uma parede globo já escolhida
+
+        // Aceita esta parede como globo.
+        const WallRef &w = walls[idx];
+        if (w.isHorz)
+            wallHorzIsGlobe[w.i][w.j] = 1;
+        else
+            wallVertIsGlobe[w.i][w.j] = 1;
+
+        globeCount++;
+
+        // Recalcula, via BFS a partir desta nova parede globo, a distância
+        // mínima de todas as paredes até a parede globo mais próxima -
+        // atualizando apenas onde a nova distância é menor que a anterior.
+        std::vector<int> distFromHere(totalWalls, kInfinity);
+        distFromHere[idx] = 0;
+        std::queue<int> bfsQueue;
+        bfsQueue.push(idx);
+
+        while (!bfsQueue.empty())
+        {
+            int cur = bfsQueue.front();
+            bfsQueue.pop();
+
+            // Não precisa expandir além do necessário: distâncias maiores
+            // que kMinHopDistance não vão mais ser usadas para bloquear
+            // nada (qualquer parede já distante o suficiente).
+            if (distFromHere[cur] >= kMinHopDistance)
+                continue;
+
+            for (int neighborIdx : adjacency[cur])
+            {
+                if (distFromHere[neighborIdx] == kInfinity)
+                {
+                    distFromHere[neighborIdx] = distFromHere[cur] + 1;
+                    bfsQueue.push(neighborIdx);
+                }
+            }
+        }
+
+        for (int k = 0; k < totalWalls; k++)
+            distToNearestGlobe[k] = std::min(distToNearestGlobe[k], distFromHere[k]);
     }
 }
 

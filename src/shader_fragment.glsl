@@ -25,6 +25,7 @@ uniform mat4 projection;
 #define WALL   3
 #define TETO   4
 #define RAT    5
+#define WALL_GLOBE 6
 uniform int object_id;
 
 // Verdadeiro (1) quando a câmera de cima (visão de espectador / TAB) está
@@ -64,6 +65,7 @@ uniform sampler2D TextureImage1;
 uniform sampler2D TextureImage2;
 uniform sampler2D TextureImage3;
 uniform sampler2D TextureImage4;
+uniform sampler2D TextureImage5;
 uniform float TextureRepeat;
 
 // O valor de saída ("out") de um Fragment Shader é a cor final do fragmento.
@@ -191,6 +193,20 @@ void main()
         // Mesma ideia do chão/teto: as paredes ficam bem escuras fora do
         // alcance da lanterna, mas não 100% pretas (mantendo um mínimo de
         // legibilidade da geometria do labirinto).
+        Ka = Kd0 * 0.08;
+        q = 18.0;
+    }
+    else if ( object_id == WALL_GLOBE )
+    {
+        // Paredes "globo": sorteadas aleatoriamente entre as paredes do
+        // labirinto (ver AssignWallTextures() em maze.cpp), usam a mesma
+        // projeção planar via texcoords do cubo e o MESMO modelo de
+        // iluminação (especular de Phong) das paredes "brick" comuns -
+        // único, a refletância difusa Kd0 vem da textura de globo
+        // (TextureImage5) em vez da textura de tijolos.
+        vec2 uvw = texcoords * TextureRepeat;
+        Kd0 = texture(TextureImage5, uvw).rgb;
+        Ks = vec3(0.15,0.15,0.15);
         Ka = Kd0 * 0.08;
         q = 18.0;
     }

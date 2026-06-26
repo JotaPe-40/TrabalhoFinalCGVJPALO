@@ -443,6 +443,7 @@ int main(int argc, char *argv[])
     LoadTextureImage(FindFile("assets/teto.png").c_str());  // TextureImage2
     LoadTextureImage(FindFile("assets/smile.png").c_str()); // TextureImage3
     LoadTextureImage(FindFile("assets/fur.png").c_str());   // TextureImage4
+    LoadTextureImage(FindFile("assets/globo.png").c_str()); // TextureImage5
 
     // Construímos apenas o chão/grama.
     std::string plane_path = FindFile("data/plane.obj");
@@ -772,6 +773,7 @@ int main(int argc, char *argv[])
 #define WALL 3
 #define TETO 4
 #define RAT 5
+#define WALL_DRAWING 6
 
         float mazeSizeX = mazeW * cellSize;
         float mazeSizeZ = mazeH * cellSize;
@@ -860,6 +862,21 @@ int main(int argc, char *argv[])
 
                     glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(wm));
 
+                    if ((i == 2 && j == 0) || (i == 5 && j == mazeW) || (i == 7 && j == 4))
+                    {
+                        glUniform1i(g_object_id_uniform, WALL_DRAWING);
+
+                        if (g_texture_repeat_uniform != -1)
+                            glUniform1f(g_texture_repeat_uniform, 1.0f);
+                    }
+                    else
+                    {
+                        glUniform1i(g_object_id_uniform, WALL);
+
+                        if (g_texture_repeat_uniform != -1)
+                            glUniform1f(g_texture_repeat_uniform, 2.0f);
+                    }
+
                     glm::vec3 wallCenter = glm::vec3(x, g_GroundY + wallHeight / 2.0f, z);
                     glUniform1f(g_light_visibility_uniform, ComputeLightVisibility(lanternPos, wallCenter, cellSize * 0.5f));
 
@@ -885,6 +902,21 @@ int main(int argc, char *argv[])
                         Matrix_Translate(x, g_GroundY + wallHeight / 2.0f, z) * Matrix_Scale(wallThickness, wallHeight, cellSize);
 
                     glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(wm));
+
+                    if ((i == 2 && j == 0) || (i == 5 && j == mazeW) || (i == 7 && j == 4))
+                    {
+                        glUniform1i(g_object_id_uniform, WALL_DRAWING);
+
+                        if (g_texture_repeat_uniform != -1)
+                            glUniform1f(g_texture_repeat_uniform, 1.0f);
+                    }
+                    else
+                    {
+                        glUniform1i(g_object_id_uniform, WALL);
+
+                        if (g_texture_repeat_uniform != -1)
+                            glUniform1f(g_texture_repeat_uniform, 2.0f);
+                    }
 
                     glm::vec3 wallCenter = glm::vec3(x, g_GroundY + wallHeight / 2.0f, z);
                     glUniform1f(g_light_visibility_uniform, ComputeLightVisibility(lanternPos, wallCenter, cellSize * 0.5f));
@@ -1237,6 +1269,8 @@ void LoadShadersFromFiles()
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage2"), 2);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage3"), 3);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage4"), 4);
+    glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage5"), 5);
+
     g_texture_repeat_uniform = glGetUniformLocation(g_GpuProgramID, "TextureRepeat");
     glUseProgram(0);
 }

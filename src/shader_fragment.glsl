@@ -26,6 +26,8 @@ uniform vec3 pPos;
 #define WALL   3
 #define TETO   4
 #define RAT    5
+#define WALL_DRAWING 6
+
 uniform int object_id;
 uniform int c_top;
 
@@ -39,6 +41,7 @@ uniform sampler2D TextureImage1;
 uniform sampler2D TextureImage2;
 uniform sampler2D TextureImage3;
 uniform sampler2D TextureImage4;
+uniform sampler2D TextureImage5;
 uniform float TextureRepeat;
 
 // O valor de saída ("out") de um Fragment Shader é a cor final do fragmento.
@@ -174,6 +177,15 @@ void main()
         Ks = vec3(0.3,0.3,0.3);
         Ka = vec3(0.0,0.0,0.0);
         q = 18.0;
+    }
+    else if ( object_id == WALL_DRAWING )
+    {
+    vec2 uvw = texcoords * TextureRepeat;
+    Kd0 = texture(TextureImage5, uvw).rgb;
+
+    Ks = vec3(0.3, 0.3, 0.3);
+    Ka = vec3(0.0, 0.0, 0.0);
+    q = 18.0;
     }
 
     else if ( object_id == RAT )

@@ -159,6 +159,7 @@ void PrintObjModelInfo(ObjModel *);                                          // 
 // NOSSAS FUNÇÕES: ratos, colisão jogador-smile e tela de fim de jogo.
 glm::vec3 ComputeSmilePosition();                                   // Posição (mundo) do centro do smile na célula configurada
 glm::vec3 ComputeLanternPosition();                                  // Posição (mundo) da lanterna do personagem, fonte de luz principal da cena
+glm::vec3 ComputeLanternDirection();                                 // Direção (mundo, normalizada) para onde a lanterna aponta - segue o olhar do jogador (yaw + pitch), para o efeito de spotlight no fragment shader
 float ComputeLightVisibility(glm::vec3 lightPos, glm::vec3 targetPos, float sampleRadius); // Fração (0-1) de quanto a luz alcança um objeto, suavizando a transição com a sombra
 void UpdateVertexLightWeights(const char *object_name, const glm::mat4 &model, glm::vec3 lightPos); // Recalcula e envia à GPU o peso de luz POR VÉRTICE de um objeto (cubo), para sombras suaves ao longo da própria face
 void RandomizeStartAndGoalCells();                                   // Sorteia células (distintas) para o jogador e o smile, e regenera o labirinto a partir da célula do jogador
@@ -174,7 +175,9 @@ bool SphereAabbIntersect(glm::vec3 sphereCenter, float sphereRadius,
 bool AabbAabbIntersect(glm::vec3 centerA, glm::vec3 halfA,
                         glm::vec3 centerB, glm::vec3 halfB);           // Teste de intersecção cubo-cubo
 void ResetGame(GLFWwindow *window);                                  // Reinicia labirinto, jogador, ratos e cronômetro
+void StartGameFromMenu();                                            // Inicia a primeira partida a partir da tela de menu (sorteia labirinto, ratos, cronômetro e música)
 void DrawGameOverScreen(GLFWwindow *window, double elapsedSeconds); // Desenha overlay de fim de jogo + botão "jogar novamente"
+void DrawMenuScreen(GLFWwindow *window); // Desenha a tela de menu inicial: objetivo, controles, botão "Iniciar" e caixa de seleção de música
 void DrawColoredQuad2D(float x0, float y0, float x1, float y1, float r, float g, float b, float a); // Desenha um quad 2D colorido (para o botão)
 void DrawPlayerCharacter(glm::vec3 position, float yaw, const glm::mat4 &view, const glm::mat4 &projection); // Desenha o boneco explorador do jogador
 
@@ -349,10 +352,11 @@ const float g_RatScaredDuration = 3.5f; // segundos que o rato passa fugindo ap�
 // ===========================================================================
 enum GameState
 {
+    GAME_MENU = 2, // Tela inicial (objetivo, controles, botão "Iniciar" e checkbox de música), antes da partida começar
     GAME_PLAYING = 0,
     GAME_OVER = 1
 };
-GameState g_GameState = GAME_PLAYING;
+GameState g_GameState = GAME_MENU;
 double g_GameStartTime = 0.0;   // glfwGetTime() no início da partida atual
 double g_GameOverElapsed = 0.0; // tempo total decorrido, congelado no momento do game over
 
@@ -362,6 +366,26 @@ double g_GameOverElapsed = 0.0; // tempo total decorrido, congelado no momento d
 float g_RestartButtonMinX = 0.0f, g_RestartButtonMaxX = 0.0f;
 float g_RestartButtonMinY = 0.0f, g_RestartButtonMaxY = 0.0f;
 bool g_RestartButtonValid = false;
+
+// ===========================================================================
+// Tela de menu inicial (ver DrawMenuScreen())
+// ===========================================================================
+// Liga/desliga a música de fundo do jogo. Controlada pela caixa de seleção
+// na tela de menu; também pode ser alternada a qualquer momento (mesmo
+// depois de iniciar a partida) clicando na mesma caixa, caso o menu seja
+// reaberto - mas por padrão a tela de menu só aparece uma vez, antes da
+// primeira partida.
+bool g_MusicEnabled = true;
+
+// Áreas clicáveis da tela de menu (botão "Iniciar" e a caixa de seleção de
+// música), calculadas em DrawMenuScreen() e usadas em MouseButtonCallback().
+float g_StartButtonMinX = 0.0f, g_StartButtonMaxX = 0.0f;
+float g_StartButtonMinY = 0.0f, g_StartButtonMaxY = 0.0f;
+bool g_StartButtonValid = false;
+
+float g_MusicCheckboxMinX = 0.0f, g_MusicCheckboxMaxX = 0.0f;
+float g_MusicCheckboxMinY = 0.0f, g_MusicCheckboxMaxY = 0.0f;
+bool g_MusicCheckboxValid = false;
 
 // Variáveis que definem um programa de GPU (shaders). Veja função LoadShadersFromFiles().
 GLuint g_GpuProgramID = 0;
@@ -373,6 +397,7 @@ GLint g_bbox_min_uniform;
 GLint g_bbox_max_uniform;
 GLint g_texture_repeat_uniform;
 GLint g_light_position_uniform;  // posição da lanterna do personagem, em coordenadas de mundo
+GLint g_light_direction_uniform; // direção (normalizada) para onde a lanterna aponta, em coordenadas de mundo - permite tratá-la como um SPOTLIGHT (cone de luz) em vez de uma luz pontual onidirecional
 GLint g_light_visibility_uniform; // fração (0.0-1.0) de quanto a luz da lanterna alcança o objeto desenhado (suaviza a transição com a sombra das paredes)
 
 // Número de texturas carregadas pela função LoadTextureImage()
@@ -551,8 +576,14 @@ int main(int argc, char *argv[])
     glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
 
-    // Capture mouse cursor for first-person view
-    if (g_FpsMode)
+    // O cursor do mouse só é capturado/escondido (modo FPS) quando a
+    // partida realmente começa - enquanto a tela de menu inicial estiver
+    // visível (g_GameState == GAME_MENU), o cursor precisa ficar livre e
+    // visível para que o jogador possa clicar no botão "Iniciar" e na
+    // caixa de seleção de música. A captura do cursor acontece em
+    // MouseButtonCallback() no momento exato em que StartGameFromMenu() é
+    // chamada.
+    if (g_FpsMode && g_GameState != GAME_MENU)
     {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         glfwGetCursorPos(window, &g_LastCursorPosX, &g_LastCursorPosY);
@@ -561,19 +592,15 @@ int main(int argc, char *argv[])
 
     double lastTime = glfwGetTime();
 
-    // Sorteia posições aleatórias (e distintas) para o jogador e o smile, e
-    // gera um novo labirinto a partir da célula do jogador (garantindo, por
-    // construção do algoritmo, um caminho entre as duas posições).
+    // O jogo começa na tela de menu (g_GameState já inicializado como
+    // GAME_MENU). Geramos um labirinto e posições válidas desde já apenas
+    // para que a cena 3D já apareça (desfocada por baixo do painel do
+    // menu) atrás da tela inicial, em vez de uma tela vazia - mas o
+    // cronômetro, os ratos e a música de fundo só começam quando o
+    // jogador realmente clica em "Iniciar" (ver StartGameFromMenu(),
+    // chamada em MouseButtonCallback()).
     RandomizeStartAndGoalCells();
-
     SpawnRats();
-    g_GameState = GAME_PLAYING;
-    g_GameStartTime = lastTime;
-
-    // Inicia a trilha de fundo (música de exploração estilo RPG), que toca
-    // em loop contínuo até o fim da partida (ver g_GameState == GAME_OVER
-    // mais abaixo, onde a música é parada).
-    Audio_PlayBackgroundMusic();
 
     // Ficamos em um loop infinito, renderizando, até que o usuário feche a janela
     while (!glfwWindowShouldClose(window))
@@ -827,6 +854,16 @@ int main(int argc, char *argv[])
         glm::vec3 lanternPos = ComputeLanternPosition();
         glUniform4f(g_light_position_uniform, lanternPos.x, lanternPos.y, lanternPos.z, 1.0f);
 
+        // Direção da lanterna (spotlight): para onde o personagem está
+        // olhando agora (yaw + pitch). Usada no fragment shader para
+        // restringir a luz a um CONE na frente do personagem, em vez de
+        // espalhar igualmente em todas as direções a partir da posição da
+        // lanterna (o que fazia a luz parecer uma lâmpada onidirecional
+        // flutuando ao lado do personagem, e não uma lanterna apontada para
+        // frente).
+        glm::vec3 lanternDir = ComputeLanternDirection();
+        glUniform4f(g_light_direction_uniform, lanternDir.x, lanternDir.y, lanternDir.z, 0.0f);
+
 #define SPHERE 0
 #define PLANE 2
 #define WALL 3
@@ -923,17 +960,18 @@ int main(int argc, char *argv[])
             DrawVirtualObject("the_plane");
 
             glEnable(GL_CULL_FACE);
-
-            // Draw maze walls (render double-sided and with low tiling)
-            glUniform1i(g_object_id_uniform, WALL);
-
-            if (g_texture_repeat_uniform != -1)
-                glUniform1f(g_texture_repeat_uniform, 2.0f);
-
-            glDisable(GL_CULL_FACE);
         }
 
+        // Paredes do labirinto (textura "brick" ou "globo"): cada parede
+        // usa exatamente UMA cópia completa da textura por face (sem
+        // repetição/tiling), preenchendo o bloco inteiro com uma única
+        // imagem - por isso TextureRepeat = 1.0 aqui. Antes este valor
+        // ficava em 2.0 (resíduo de um bloco de código morto que nunca
+        // chegava a desenhar nada), o que fazia a textura repetir 2x em
+        // cada eixo da face (4 cópias visíveis por parede).
         glUniform1i(g_object_id_uniform, WALL);
+        if (g_texture_repeat_uniform != -1)
+            glUniform1f(g_texture_repeat_uniform, 1.0f);
         // horizontal walls
         for (int i = 0; i <= mazeH; i++)
         {
@@ -1065,6 +1103,16 @@ int main(int argc, char *argv[])
             DrawGameOverScreen(window, g_GameOverElapsed);
         }
 
+        // Antes da primeira partida começar, mostramos a tela de menu
+        // (objetivo, controles, caixa de seleção de música e botão
+        // "Iniciar") por cima da cena 3D, que continua sendo desenhada
+        // normalmente ao fundo (labirinto já sorteado acima, mas o
+        // cronômetro/ratos/música ainda não foram iniciados).
+        if (g_GameState == GAME_MENU)
+        {
+            DrawMenuScreen(window);
+        }
+
         // O framebuffer onde OpenGL executa as operações de renderização não
         // é o mesmo que está sendo mostrado para o usuário, caso contrário
         // seria possível ver artefatos conhecidos como "screen tearing". A
@@ -1091,78 +1139,104 @@ int main(int argc, char *argv[])
 }
 
 // Implementation of BuildCubeAndAddToVirtualScene (placed after SceneObject definition)
+//
+// Constrói um cubo com cada uma de suas 6 faces SUBDIVIDIDA em uma grade de
+// "kGridSubdivisions x kGridSubdivisions" quads (em vez de um único quad/2
+// triângulos por face, como antes). Mais vértices por face significam mais
+// pontos de amostra para a vetorização da iluminação por vértice
+// (UpdateVertexLightWeights(), em main.cpp): com apenas os 4 cantos de uma
+// face grande (como a face frontal de uma parede comprida), a sombra
+// interpolada entre eles tende a aparecer "poligonal"/quadrada perto de
+// bordas de oclusão; com uma grade mais fina, a mesma sombra é amostrada e
+// interpolada em muito mais pontos ao longo da face, aproximando-se de uma
+// transição suave e contínua.
 void BuildCubeAndAddToVirtualScene(float size, const char *name)
 {
     float h = size / 2.0f;
 
-    std::vector<GLuint> indices = {
-        0, 1, 2, 3, 4, 5,
-        6, 7, 8, 9, 10, 11,
-        12, 13, 14, 15, 16, 17,
-        18, 19, 20, 21, 22, 23,
-        24, 25, 26, 27, 28, 29,
-        30, 31, 32, 33, 34, 35};
+    // Número de subdivisões por lado de cada face (grade
+    // kGridSubdivisions x kGridSubdivisions de quads, ou seja,
+    // (kGridSubdivisions+1) x (kGridSubdivisions+1) vértices por face).
+    // Valor escolhido como equilíbrio entre suavidade da sombra vetorizada
+    // por vértice e custo de CPU (UpdateVertexLightWeights testa oclusão
+    // por parede individualmente para cada vértice, a cada parede, a cada
+    // frame).
+    const int kGridSubdivisions = 4;
 
     std::vector<float> model_coefficients;
     std::vector<float> normal_coefficients;
     std::vector<float> texture_coefficients;
+    std::vector<GLuint> indices;
 
-    auto v = [&](float x, float y, float z, float nx, float ny, float nz, float u, float vv)
+    // Emite uma face plana subdividida em grade, com canto inferior-esquerdo
+    // "origin", e dois vetores de borda "edgeU"/"edgeV" (cada um already
+    // escalado para o tamanho TOTAL da face); "normal" é a normal da face
+    // (constante para todos os vértices dela, já que é plana).
+    auto emitGridFace = [&](glm::vec3 origin, glm::vec3 edgeU, glm::vec3 edgeV, glm::vec3 normal)
     {
-        model_coefficients.push_back(x);
-        model_coefficients.push_back(y);
-        model_coefficients.push_back(z);
-        model_coefficients.push_back(1.0f);
-        normal_coefficients.push_back(nx);
-        normal_coefficients.push_back(ny);
-        normal_coefficients.push_back(nz);
-        normal_coefficients.push_back(0.0f);
-        texture_coefficients.push_back(u);
-        texture_coefficients.push_back(vv);
+        GLuint baseIndex = (GLuint)(model_coefficients.size() / 4);
+
+        for (int row = 0; row <= kGridSubdivisions; row++)
+        {
+            float tV = (float)row / (float)kGridSubdivisions;
+            for (int col = 0; col <= kGridSubdivisions; col++)
+            {
+                float tU = (float)col / (float)kGridSubdivisions;
+
+                glm::vec3 pos = origin + edgeU * tU + edgeV * tV;
+
+                model_coefficients.push_back(pos.x);
+                model_coefficients.push_back(pos.y);
+                model_coefficients.push_back(pos.z);
+                model_coefficients.push_back(1.0f);
+
+                normal_coefficients.push_back(normal.x);
+                normal_coefficients.push_back(normal.y);
+                normal_coefficients.push_back(normal.z);
+                normal_coefficients.push_back(0.0f);
+
+                // Coordenadas de textura: a face inteira (0..1 em ambos os
+                // eixos) continua mapeando exatamente UMA cópia completa da
+                // textura, exatamente como antes da subdivisão - só a
+                // densidade de vértices aumentou, não a repetição (tiling)
+                // da imagem.
+                texture_coefficients.push_back(tU);
+                texture_coefficients.push_back(tV);
+            }
+        }
+
+        int stride = kGridSubdivisions + 1;
+        for (int row = 0; row < kGridSubdivisions; row++)
+        {
+            for (int col = 0; col < kGridSubdivisions; col++)
+            {
+                GLuint i0 = baseIndex + row * stride + col;
+                GLuint i1 = baseIndex + row * stride + col + 1;
+                GLuint i2 = baseIndex + (row + 1) * stride + col + 1;
+                GLuint i3 = baseIndex + (row + 1) * stride + col;
+
+                indices.push_back(i0);
+                indices.push_back(i1);
+                indices.push_back(i2);
+
+                indices.push_back(i2);
+                indices.push_back(i3);
+                indices.push_back(i0);
+            }
+        }
     };
 
-    // front
-    v(-h, -h, h, 0, 0, 1, 0.0f, 0.0f);
-    v(h, -h, h, 0, 0, 1, 1.0f, 0.0f);
-    v(h, h, h, 0, 0, 1, 1.0f, 1.0f);
-    v(h, h, h, 0, 0, 1, 1.0f, 1.0f);
-    v(-h, h, h, 0, 0, 1, 0.0f, 1.0f);
-    v(-h, -h, h, 0, 0, 1, 0.0f, 0.0f);
-    // back
-    v(h, -h, -h, 0, 0, -1, 0.0f, 0.0f);
-    v(-h, -h, -h, 0, 0, -1, 1.0f, 0.0f);
-    v(-h, h, -h, 0, 0, -1, 1.0f, 1.0f);
-    v(-h, h, -h, 0, 0, -1, 1.0f, 1.0f);
-    v(h, h, -h, 0, 0, -1, 0.0f, 1.0f);
-    v(h, -h, -h, 0, 0, -1, 0.0f, 0.0f);
-    // left
-    v(-h, -h, -h, -1, 0, 0, 0.0f, 0.0f);
-    v(-h, -h, h, -1, 0, 0, 1.0f, 0.0f);
-    v(-h, h, h, -1, 0, 0, 1.0f, 1.0f);
-    v(-h, h, h, -1, 0, 0, 1.0f, 1.0f);
-    v(-h, h, -h, -1, 0, 0, 0.0f, 1.0f);
-    v(-h, -h, -h, -1, 0, 0, 0.0f, 0.0f);
-    // right
-    v(h, -h, h, 1, 0, 0, 0.0f, 0.0f);
-    v(h, -h, -h, 1, 0, 0, 1.0f, 0.0f);
-    v(h, h, -h, 1, 0, 0, 1.0f, 1.0f);
-    v(h, h, -h, 1, 0, 0, 1.0f, 1.0f);
-    v(h, h, h, 1, 0, 0, 0.0f, 1.0f);
-    v(h, -h, h, 1, 0, 0, 0.0f, 0.0f);
-    // top
-    v(-h, h, h, 0, 1, 0, 0.0f, 0.0f);
-    v(h, h, h, 0, 1, 0, 1.0f, 0.0f);
-    v(h, h, -h, 0, 1, 0, 1.0f, 1.0f);
-    v(h, h, -h, 0, 1, 0, 1.0f, 1.0f);
-    v(-h, h, -h, 0, 1, 0, 0.0f, 1.0f);
-    v(-h, h, h, 0, 1, 0, 0.0f, 0.0f);
-    // bottom
-    v(-h, -h, -h, 0, -1, 0, 0.0f, 0.0f);
-    v(h, -h, -h, 0, -1, 0, 1.0f, 0.0f);
-    v(h, -h, h, 0, -1, 0, 1.0f, 1.0f);
-    v(h, -h, h, 0, -1, 0, 1.0f, 1.0f);
-    v(-h, -h, h, 0, -1, 0, 0.0f, 1.0f);
-    v(-h, -h, -h, 0, -1, 0, 0.0f, 0.0f);
+    // As 6 faces, cada uma definida por um canto de origem + dois vetores de
+    // borda (U e V) que varrem o tamanho total da face - preservando
+    // exatamente a mesma posição, orientação de normal e sentido de
+    // enrolamento (winding order / CCW visto de fora) que a versão anterior
+    // (não subdividida) desta mesma função.
+    emitGridFace(glm::vec3(-h, -h, h), glm::vec3(2 * h, 0, 0), glm::vec3(0, 2 * h, 0), glm::vec3(0, 0, 1));  // front
+    emitGridFace(glm::vec3(h, -h, -h), glm::vec3(-2 * h, 0, 0), glm::vec3(0, 2 * h, 0), glm::vec3(0, 0, -1)); // back
+    emitGridFace(glm::vec3(-h, -h, -h), glm::vec3(0, 0, 2 * h), glm::vec3(0, 2 * h, 0), glm::vec3(-1, 0, 0)); // left
+    emitGridFace(glm::vec3(h, -h, h), glm::vec3(0, 0, -2 * h), glm::vec3(0, 2 * h, 0), glm::vec3(1, 0, 0));   // right
+    emitGridFace(glm::vec3(-h, h, h), glm::vec3(2 * h, 0, 0), glm::vec3(0, 0, -2 * h), glm::vec3(0, 1, 0));   // top
+    emitGridFace(glm::vec3(-h, -h, -h), glm::vec3(2 * h, 0, 0), glm::vec3(0, 0, 2 * h), glm::vec3(0, -1, 0)); // bottom
 
     GLuint vertex_array_object_id;
     glGenVertexArrays(1, &vertex_array_object_id);
@@ -1198,7 +1272,9 @@ void BuildCubeAndAddToVirtualScene(float size, const char *name)
     // UpdateVertexLightWeights() - permitindo que a sombra se espalhe
     // suavemente AO LONGO da própria face da parede (vetorização da
     // iluminação por vértice / shading tipo Gouraud para a visibilidade),
-    // em vez de um valor único e abrupto por parede.
+    // em vez de um valor único e abrupto por parede. Com a face agora
+    // subdividida em grade, este peso é calculado em MUITO mais pontos por
+    // face do que antes (só os 4 cantos), suavizando bastante a transição.
     size_t numVertices = model_coefficients.size() / 4;
     std::vector<float> initialLightWeights(numVertices, 1.0f);
 
@@ -1375,6 +1451,7 @@ void LoadShadersFromFiles()
     g_bbox_min_uniform = glGetUniformLocation(g_GpuProgramID, "bbox_min");
     g_bbox_max_uniform = glGetUniformLocation(g_GpuProgramID, "bbox_max");
     g_light_position_uniform = glGetUniformLocation(g_GpuProgramID, "light_position");
+    g_light_direction_uniform = glGetUniformLocation(g_GpuProgramID, "light_direction");
     g_light_visibility_uniform = glGetUniformLocation(g_GpuProgramID, "light_visibility");
 
     // Variáveis em "shader_fragment.glsl" para acesso das imagens de textura
@@ -1715,6 +1792,22 @@ glm::vec3 ComputeLanternPosition()
     float lanternHeight = g_GroundY + g_PlayerEyeHeight * 0.75f;
 
     return g_PlayerPosition + forward * forwardOffset + right * rightOffset + glm::vec3(0.0f, lanternHeight - g_PlayerPosition.y, 0.0f);
+}
+
+// Direção (mundo, normalizada) para onde a lanterna aponta: segue o olhar
+// completo do jogador (yaw E pitch, exatamente a mesma fórmula usada para o
+// vetor "front" da câmera em primeira pessoa), e não só o yaw (rotação
+// horizontal) como antes. Isso é o que faz a luz se comportar como uma
+// LANTERNA de fato - apontando para onde o personagem está olhando, inclusive
+// para cima/baixo - em vez de uma luz pontual onidirecional que ilumina
+// igualmente em todas as direções a partir da posição da lanterna.
+glm::vec3 ComputeLanternDirection()
+{
+    glm::vec3 dir;
+    dir.x = cosf(g_PlayerPitch) * sinf(g_PlayerYaw);
+    dir.y = sinf(g_PlayerPitch);
+    dir.z = cosf(g_PlayerPitch) * cosf(g_PlayerYaw);
+    return glm::normalize(dir);
 }
 
 // Testa se a luz da lanterna alcança um ponto específico do mundo em linha
@@ -2290,10 +2383,35 @@ void ResetGame(GLFWwindow *window)
     g_RestartButtonValid = false;
 
     // Reinicia a trilha de fundo para a nova partida (ela foi parada ao
-    // final da partida anterior, junto com a tela de fim de jogo).
-    Audio_PlayBackgroundMusic();
+    // final da partida anterior, junto com a tela de fim de jogo) - mas só
+    // se a música estiver habilitada na caixa de seleção do menu inicial.
+    if (g_MusicEnabled)
+        Audio_PlayBackgroundMusic();
 
     (void)window;
+}
+
+// Inicia a primeira partida a partir da tela de menu (chamada quando o
+// jogador clica no botão "Iniciar" em DrawMenuScreen()): sorteia o
+// labirinto/posições, espalha os ratos, e começa o cronômetro e a música de
+// fundo (esta última apenas se a caixa de seleção de música estiver
+// marcada). Equivalente ao que ResetGame() faz para reinícios subsequentes,
+// mas mantido como uma função separada para deixar claro, no código do
+// menu, que esta é a transição MENU -> PLAYING (e não um reinício de
+// partida em andamento).
+void StartGameFromMenu()
+{
+    RandomizeStartAndGoalCells();
+
+    SpawnRats();
+
+    g_GameState = GAME_PLAYING;
+    g_GameStartTime = glfwGetTime();
+    g_GameOverElapsed = 0.0;
+    g_RestartButtonValid = false;
+
+    if (g_MusicEnabled)
+        Audio_PlayBackgroundMusic();
 }
 
 // ---------------------------------------------------------------------------
@@ -2696,6 +2814,128 @@ void DrawColoredQuad2D(float x0, float y0, float x1, float y1, float r, float g,
     glUseProgram(0);
 }
 
+// Desenha a tela de menu inicial (mostrada antes da primeira partida
+// começar): um texto explicando o objetivo do jogo, os controles, uma caixa
+// de seleção para ligar/desligar a música de fundo, e o botão "Iniciar".
+// Reaproveita o mesmo estilo visual (quads 2D + texto) já usado em
+// DrawGameOverScreen(), por consistência.
+void DrawMenuScreen(GLFWwindow *window)
+{
+    // Painel de fundo (branco, semi-transparente) sobre toda a tela.
+    DrawColoredQuad2D(-1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.65f);
+
+    // Painel sólido (opaco, branco) atrás de todo o conteúdo do menu,
+    // garantindo legibilidade total do texto independente do que esteja
+    // atrás na cena 3D.
+    DrawColoredQuad2D(-0.66f, -0.62f, 0.66f, 0.62f, 1.0f, 1.0f, 1.0f, 0.95f);
+
+    std::string title = "LABIRINTO DO RATO";
+
+    // Objetivo do jogo (resumido em poucas linhas curtas, já que o sistema
+    // de texto usado não faz quebra automática de linha).
+    std::vector<std::string> objectiveLines = {
+        "Objetivo:",
+        "Explore o labirinto escuro com sua lanterna",
+        "e encontre o \"smile\" brilhante para vencer.",
+        "Cuidado com os ratinhos pelo caminho!"};
+
+    // Controles do jogo.
+    std::vector<std::string> controlLines = {
+        "Controles:",
+        "WASD - mover     Mouse - olhar",
+        "Shift - correr    Espaco - so paredes da borda",
+        "TAB - visao de cima    ESC - sair"};
+
+    float titleScale = 2.6f;
+    float textScale = 1.1f;
+    float lineSpacing = 0.075f;
+
+    float titleX = -0.34f;
+    float titleY = 0.52f;
+    TextRendering_PrintString(window, title, titleX, titleY, titleScale);
+
+    float y = 0.36f;
+    for (const std::string &line : objectiveLines)
+    {
+        TextRendering_PrintString(window, line, -0.60f, y, textScale);
+        y -= lineSpacing;
+    }
+
+    y -= 0.04f;
+    for (const std::string &line : controlLines)
+    {
+        TextRendering_PrintString(window, line, -0.60f, y, textScale);
+        y -= lineSpacing;
+    }
+
+    // Caixa de seleção (checkbox) para ligar/desligar a música de fundo.
+    float checkboxSize = 0.05f;
+    float checkboxX = -0.60f;
+    float checkboxY = -0.22f;
+
+    g_MusicCheckboxMinX = checkboxX;
+    g_MusicCheckboxMaxX = checkboxX + checkboxSize;
+    g_MusicCheckboxMinY = checkboxY;
+    g_MusicCheckboxMaxY = checkboxY + checkboxSize;
+    g_MusicCheckboxValid = true;
+
+    // Contorno da caixa (sempre visível) + preenchimento interno (só quando
+    // a música está habilitada), simulando um checkbox marcado/desmarcado.
+    DrawColoredQuad2D(checkboxX, checkboxY, checkboxX + checkboxSize, checkboxY + checkboxSize, 0.15f, 0.15f, 0.15f, 1.0f);
+    if (g_MusicEnabled)
+    {
+        float innerMargin = checkboxSize * 0.22f;
+        DrawColoredQuad2D(
+            checkboxX + innerMargin, checkboxY + innerMargin,
+            checkboxX + checkboxSize - innerMargin, checkboxY + checkboxSize - innerMargin,
+            0.25f, 0.65f, 0.30f, 1.0f);
+    }
+    else
+    {
+        // Caixa "vazia" por dentro (branca), deixando claro que está
+        // desmarcada mesmo sem depender só da cor do contorno.
+        float innerMargin = checkboxSize * 0.12f;
+        DrawColoredQuad2D(
+            checkboxX + innerMargin, checkboxY + innerMargin,
+            checkboxX + checkboxSize - innerMargin, checkboxY + checkboxSize - innerMargin,
+            1.0f, 1.0f, 1.0f, 1.0f);
+    }
+
+    std::string musicLabel = "Musica do jogo";
+    TextRendering_PrintString(window, musicLabel, checkboxX + checkboxSize + 0.03f, checkboxY - 0.005f, textScale);
+
+    // Botão "Iniciar".
+    float btnMinX = -0.22f, btnMaxX = 0.22f;
+    float btnMinY = -0.52f, btnMaxY = -0.34f;
+
+    g_StartButtonMinX = btnMinX;
+    g_StartButtonMaxX = btnMaxX;
+    g_StartButtonMinY = btnMinY;
+    g_StartButtonMaxY = btnMaxY;
+    g_StartButtonValid = true;
+
+    // Detecta hover do mouse sobre o botão e sobre a checkbox, para dar
+    // feedback visual simples (mesma técnica usada em DrawGameOverScreen).
+    double mouseX, mouseY;
+    glfwGetCursorPos(window, &mouseX, &mouseY);
+    int winW, winH;
+    glfwGetWindowSize(window, &winW, &winH);
+    float ndcX = (winW > 0) ? (2.0f * (float)mouseX / (float)winW - 1.0f) : 0.0f;
+    float ndcY = (winH > 0) ? (1.0f - 2.0f * (float)mouseY / (float)winH) : 0.0f;
+    bool hoveringStart = (ndcX >= btnMinX && ndcX <= btnMaxX && ndcY >= btnMinY && ndcY <= btnMaxY);
+
+    if (hoveringStart)
+        DrawColoredQuad2D(btnMinX, btnMinY, btnMaxX, btnMaxY, 0.35f, 0.75f, 0.35f, 1.0f);
+    else
+        DrawColoredQuad2D(btnMinX, btnMinY, btnMaxX, btnMaxY, 0.20f, 0.55f, 0.20f, 1.0f);
+
+    std::string buttonLabel = "Iniciar";
+    float buttonTextScale = 1.8f;
+    float buttonTextX = btnMinX + 0.075f;
+    float buttonTextY = (btnMinY + btnMaxY) / 2.0f - 0.035f;
+    TextRendering_PrintString(window, buttonLabel, buttonTextX, buttonTextY, buttonTextScale);
+}
+
 // Desenha a tela de fim de jogo: um painel semitransparente cobrindo a tela,
 // o texto "FIM DE JOGO" com o tempo total decorrido, e um botão "Jogar
 // novamente" (quad colorido + texto) cuja área é guardada nas variáveis
@@ -2950,6 +3190,40 @@ void FramebufferSizeCallback(GLFWwindow *window, int width, int height)
 // Função callback chamada sempre que o usuário aperta algum dos botões do mouse
 void MouseButtonCallback(GLFWwindow *window, int button, int action, int mods)
 {
+    // Tela de menu inicial: um clique do botão esquerdo dentro da área da
+    // caixa de seleção liga/desliga a música; um clique dentro do botão
+    // "Iniciar" começa a partida.
+    if (g_GameState == GAME_MENU && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
+    {
+        double mouseX, mouseY;
+        glfwGetCursorPos(window, &mouseX, &mouseY);
+        int winW, winH;
+        glfwGetWindowSize(window, &winW, &winH);
+        float ndcX = (winW > 0) ? (2.0f * (float)mouseX / (float)winW - 1.0f) : 0.0f;
+        float ndcY = (winH > 0) ? (1.0f - 2.0f * (float)mouseY / (float)winH) : 0.0f;
+
+        if (g_MusicCheckboxValid &&
+            ndcX >= g_MusicCheckboxMinX && ndcX <= g_MusicCheckboxMaxX &&
+            ndcY >= g_MusicCheckboxMinY && ndcY <= g_MusicCheckboxMaxY)
+        {
+            g_MusicEnabled = !g_MusicEnabled;
+            return;
+        }
+
+        if (g_StartButtonValid &&
+            ndcX >= g_StartButtonMinX && ndcX <= g_StartButtonMaxX &&
+            ndcY >= g_StartButtonMinY && ndcY <= g_StartButtonMaxY)
+        {
+            StartGameFromMenu();
+            if (g_FpsMode)
+            {
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                g_FirstMouse = true;
+            }
+            return;
+        }
+    }
+
     // Tela de fim de jogo: um clique do botão esquerdo dentro da área do
     // botão "Jogar novamente" reinicia uma nova partida.
     if (g_GameState == GAME_OVER && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
@@ -3031,8 +3305,12 @@ void MouseButtonCallback(GLFWwindow *window, int button, int action, int mods)
 // cima da janela OpenGL.
 void CursorPosCallback(GLFWwindow *window, double xpos, double ypos)
 {
-    // If FPS mode is enabled, use mouse movement to control yaw/pitch
-    if (g_FpsMode)
+    // If FPS mode is enabled, use mouse movement to control yaw/pitch.
+    // Durante a tela de menu inicial o cursor fica livre/visível (ver
+    // inicialização em main() e MouseButtonCallback()) para que o jogador
+    // possa clicar nos botões - por isso não usamos seu movimento para
+    // girar a câmera enquanto g_GameState == GAME_MENU.
+    if (g_FpsMode && g_GameState != GAME_MENU)
     {
         if (g_FirstMouse)
         {

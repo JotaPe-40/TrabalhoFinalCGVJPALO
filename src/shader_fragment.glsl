@@ -52,10 +52,17 @@ uniform vec4 bbox_min;
 uniform vec4 bbox_max;
 
 // ===========================================================================
-// Iluminação: a fonte de luz principal da cena é a lanterna do personagem.
-// Sua posição (em coordenadas de mundo) é recalculada a cada quadro em
-// main() (função ComputeLanternPosition()) a partir da posição/orientação
-// atual do jogador, e enviada aqui.
+// Iluminação: a fonte de luz principal da cena é a lanterna do personagem,
+// modelada como um SPOTLIGHT (cone de luz) - não mais como uma luz pontual
+// onidirecional. Sua posição e direção (em coordenadas de mundo) são
+// recalculadas a cada quadro em main() (funções ComputeLanternPosition() e
+// ComputeLanternDirection()) a partir da posição/orientação atual do
+// jogador (incluindo o pitch da câmera, ou seja, a lanterna aponta para
+// cima/baixo conforme o personagem olha para cima/baixo), e enviadas aqui.
+// O cone de luz (ver "spot_factor" mais abaixo) é o que faz a luz se
+// comportar como uma lanterna de fato: concentrada na direção em que o
+// personagem está olhando, com uma borda suave (penumbra) entre o centro
+// totalmente iluminado do feixe e a escuridão fora dele.
 //
 // "light_visibility" é um valor CONTÍNUO entre 0.0 e 1.0 (não um booleano),
 // calculado individualmente para cada objeto desenhado (cada parede, cada
@@ -68,6 +75,7 @@ uniform vec4 bbox_max;
 // transição em vez de cortar bruscamente.
 // ===========================================================================
 uniform vec4 light_position;
+uniform vec4 light_direction;
 uniform float light_visibility;
 
 // Variáveis para acesso das imagens de textura
@@ -265,6 +273,28 @@ void main()
     // células do labirinto à frente do personagem, e praticamente se
     // apague depois disso.
     float attenuation = 1.0 / (1.0 + 0.55 * light_distance + 0.40 * light_distance * light_distance);
+
+    // Fator de CONE (spotlight): mede o quão alinhado este ponto está com a
+    // direção para onde a lanterna aponta (light_direction), e não apenas a
+    // sua distância até a posição da lanterna. "-l" é o vetor que vai da
+    // lanterna até o ponto (l já é o vetor do ponto para a luz, então
+    // invertemos); o cosseno do ângulo entre esse vetor e a direção do
+    // facho mede o alinhamento: 1.0 = exatamente no centro do feixe, valores
+    // menores = cada vez mais para a periferia/fora do cone.
+    //
+    // smoothstep(cos_outer, cos_inner, cos_angle) gera uma transição suave
+    // (penumbra) entre a borda externa do cone (cos_outer, abaixo da qual a
+    // luz é 0) e a borda interna (cos_inner, acima da qual a luz é 1.0,
+    // totalmente intensa) - exatamente o comportamento de uma lanterna
+    // real, com um núcleo de luz forte e uma borda que se esvai
+    // gradualmente, em vez de um corte abrupto "dentro/fora do cone".
+    vec3 lanternToPoint = normalize(-vec3(l));
+    float cos_angle = dot(lanternToPoint, normalize(vec3(light_direction)));
+    float cos_outer = cos(radians(36.0));
+    float cos_inner = cos(radians(18.0));
+    float spot_factor = smoothstep(cos_outer, cos_inner, cos_angle);
+
+    attenuation *= spot_factor;
 
     // "light_visibility" (0.0 a 1.0, calculado por amostragem múltipla em
     // main.cpp) multiplica a atenuação: quando uma parede do labirinto

@@ -5,6 +5,13 @@
 layout (location = 0) in vec4 model_coefficients;
 layout (location = 1) in vec4 normal_coefficients;
 layout (location = 2) in vec2 texture_coefficients;
+// Peso de visibilidade da luz (0.0 a 1.0) deste vértice específico,
+// calculado na CPU (UpdateVertexLightWeights(), em main.cpp) testando
+// oclusão por paredes do labirinto exatamente NESTE ponto da geometria -
+// em vez de um único valor por objeto. O rasterizador interpola este valor
+// entre os vértices de cada triângulo (mesma ideia do Gouraud shading),
+// suavizando a transição da sombra ao longo da própria face do objeto.
+layout (location = 3) in float vertex_light_weight;
 
 // Matrizes computadas no código C++ e enviadas para a GPU
 uniform mat4 model;
@@ -19,6 +26,7 @@ out vec4 position_world;
 out vec4 position_model;
 out vec4 normal;
 out vec2 texcoords;
+out float v_vertex_light_weight;
 
 void main()
 {
@@ -63,5 +71,9 @@ void main()
 
     // Coordenadas de textura obtidas do arquivo OBJ (se existirem!)
     texcoords = texture_coefficients;
+
+    // Repassa o peso de luz deste vértice para ser interpolado pelo
+    // rasterizador (ver comentário do atributo "vertex_light_weight" acima).
+    v_vertex_light_weight = vertex_light_weight;
 }
 

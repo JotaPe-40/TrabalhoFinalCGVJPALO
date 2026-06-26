@@ -13,6 +13,17 @@ in vec4 position_model;
 // Coordenadas de textura obtidas do arquivo OBJ (se existirem!)
 in vec2 texcoords;
 
+// Peso de visibilidade da luz (0.0 a 1.0) interpolado pelo rasterizador a
+// partir do peso calculado em CADA VÉRTICE (ver shader_vertex.glsl e
+// UpdateVertexLightWeights() em main.cpp), em vez de um único valor por
+// objeto inteiro. Para objetos que não usam essa vetorização por vértice
+// (não têm o VBO dinâmico correspondente habilitado), o atributo de origem
+// fica desabilitado e a GPU usa o valor genérico 1.0 configurado em
+// main.cpp (glVertexAttrib1f), o que efetivamente neutraliza este fator
+// (multiplicação por 1.0) e mantém o comportamento antigo, baseado só no
+// uniform "light_visibility" por objeto.
+in float v_vertex_light_weight;
+
 // Matrizes computadas no código C++ e enviadas para a GPU
 uniform mat4 model;
 uniform mat4 view;
@@ -245,6 +256,14 @@ void main()
     // objeto, a luz direta é reduzida proporcionalmente - suavizando a
     // transição para a penumbra em vez de simplesmente ligar/desligar.
     attenuation *= light_visibility;
+
+    // Peso de luz POR VÉRTICE (interpolado pelo rasterizador - ver
+    // v_vertex_light_weight acima): refina ainda mais a suavização da
+    // sombra, agora ao longo da própria face do objeto (ex.: uma parede
+    // longa que tenha uma ponta iluminada e a outra na sombra), em vez de
+    // um corte abrupto no meio da parede. Para objetos que não usam essa
+    // vetorização, este fator é 1.0 (neutro) por padrão.
+    attenuation *= v_vertex_light_weight;
 
     // Termo difuso utilizando a lei dos cossenos de Lambert, com a
     // intensidade da luz já atenuada pela distância e pela visibilidade.

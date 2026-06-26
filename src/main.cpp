@@ -51,6 +51,7 @@
 // Headers locais, definidos na pasta "include/"
 #include "utils.h"
 #include "matrices.h"
+#include "collisions.h"
 
 // Estrutura que representa um modelo geométrico carregado a partir de um
 // arquivo ".obj". Veja https://en.wikipedia.org/wiki/Wavefront_.obj_file .
@@ -124,10 +125,10 @@ struct Rat
     // Pontos de controle da curva de Bézier cúbica que define o trecho de
     // movimento atual (em coordenadas de mundo, no plano XZ; Y é fixo no chão).
     glm::vec3 p0, p1, p2, p3;
-    float t;             // parâmetro [0,1] dentro do trecho atual da curva
-    float duration;      // duração (segundos) do trecho atual (independente de FPS)
-    glm::vec3 position;  // posição atual (cache, atualizada em UpdateRats)
-    float yaw;           // orientação para desenhar o modelo virado para onde anda
+    float t;            // parâmetro [0,1] dentro do trecho atual da curva
+    float duration;     // duração (segundos) do trecho atual (independente de FPS)
+    glm::vec3 position; // posição atual (cache, atualizada em UpdateRats)
+    float yaw;          // orientação para desenhar o modelo virado para onde anda
 
     // Estado de "assustado": ativado quando o jogador colide com o rato
     // (teste de intersecção cubo-cubo). Enquanto assustado, o rato foge na
@@ -157,24 +158,24 @@ GLuint CreateGpuProgram(GLuint vertex_shader_id, GLuint fragment_shader_id); // 
 void PrintObjModelInfo(ObjModel *);                                          // Função para debugging
 
 // NOSSAS FUNÇÕES: ratos, colisão jogador-smile e tela de fim de jogo.
-glm::vec3 ComputeSmilePosition();                                   // Posição (mundo) do centro do smile na célula configurada
-glm::vec3 ComputeLanternPosition();                                  // Posição (mundo) da lanterna do personagem, fonte de luz principal da cena
+glm::vec3 ComputeSmilePosition();                                                          // Posição (mundo) do centro do smile na célula configurada
+glm::vec3 ComputeLanternPosition();                                                        // Posição (mundo) da lanterna do personagem, fonte de luz principal da cena
 float ComputeLightVisibility(glm::vec3 lightPos, glm::vec3 targetPos, float sampleRadius); // Fração (0-1) de quanto a luz alcança um objeto, suavizando a transição com a sombra
-void RandomizeStartAndGoalCells();                                   // Sorteia células (distintas) para o jogador e o smile, e regenera o labirinto a partir da célula do jogador
-void SpawnRats();                                                   // Cria/recria os ratinhos em posições aleatórias válidas
-glm::vec3 RandomPointInsideMaze(std::mt19937 &rng);                 // Sorteia um ponto de mundo dentro do labirinto
-void PickNewBezierLeg(Rat &rat, std::mt19937 &rng);                 // Sorteia um novo trecho de curva de Bézier para um rato
-void PickFleeBezierLeg(Rat &rat, std::mt19937 &rng, glm::vec3 awayFrom); // Sorteia um trecho de fuga, afastando o rato do ponto "awayFrom"
-void UpdateRats(float dt);                                          // Avança a simulação de todos os ratos em dt segundos
-void CheckPlayerRatCollisions();                                    // Teste cubo-cubo jogador-rato: ao colidir, assusta o rato (foge)
-bool IsRatVisibleToPlayer(const Rat &rat, glm::vec3 playerEyePos, glm::vec3 viewDir); // Rato dentro do campo de visão e sem parede bloqueando
+void RandomizeStartAndGoalCells();                                                         // Sorteia células (distintas) para o jogador e o smile, e regenera o labirinto a partir da célula do jogador
+void SpawnRats();                                                                          // Cria/recria os ratinhos em posições aleatórias válidas
+glm::vec3 RandomPointInsideMaze(std::mt19937 &rng);                                        // Sorteia um ponto de mundo dentro do labirinto
+void PickNewBezierLeg(Rat &rat, std::mt19937 &rng);                                        // Sorteia um novo trecho de curva de Bézier para um rato
+void PickFleeBezierLeg(Rat &rat, std::mt19937 &rng, glm::vec3 awayFrom);                   // Sorteia um trecho de fuga, afastando o rato do ponto "awayFrom"
+void UpdateRats(float dt);                                                                 // Avança a simulação de todos os ratos em dt segundos
+void CheckPlayerRatCollisions();                                                           // Teste cubo-cubo jogador-rato: ao colidir, assusta o rato (foge)
+bool IsRatVisibleToPlayer(const Rat &rat, glm::vec3 playerEyePos, glm::vec3 viewDir);      // Rato dentro do campo de visão e sem parede bloqueando
 bool SphereAabbIntersect(glm::vec3 sphereCenter, float sphereRadius,
-                          glm::vec3 boxCenter, glm::vec3 halfExtents); // Teste de intersecção cubo-esfera
+                         glm::vec3 boxCenter, glm::vec3 halfExtents); // Teste de intersecção cubo-esfera
 bool AabbAabbIntersect(glm::vec3 centerA, glm::vec3 halfA,
-                        glm::vec3 centerB, glm::vec3 halfB);           // Teste de intersecção cubo-cubo
-void ResetGame(GLFWwindow *window);                                  // Reinicia labirinto, jogador, ratos e cronômetro
-void DrawGameOverScreen(GLFWwindow *window, double elapsedSeconds); // Desenha overlay de fim de jogo + botão "jogar novamente"
-void DrawColoredQuad2D(float x0, float y0, float x1, float y1, float r, float g, float b, float a); // Desenha um quad 2D colorido (para o botão)
+                       glm::vec3 centerB, glm::vec3 halfB);                                                  // Teste de intersecção cubo-cubo
+void ResetGame(GLFWwindow *window);                                                                          // Reinicia labirinto, jogador, ratos e cronômetro
+void DrawGameOverScreen(GLFWwindow *window, double elapsedSeconds);                                          // Desenha overlay de fim de jogo + botão "jogar novamente"
+void DrawColoredQuad2D(float x0, float y0, float x1, float y1, float r, float g, float b, float a);          // Desenha um quad 2D colorido (para o botão)
 void DrawPlayerCharacter(glm::vec3 position, float yaw, const glm::mat4 &view, const glm::mat4 &projection); // Desenha o boneco explorador do jogador
 
 // Declaração de funções auxiliares para renderizar texto dentro da janela
@@ -299,8 +300,8 @@ float g_SmileRadius = 0.0f;                            // recomputado a cada fra
 // apenas com as paredes do labirinto (por enquanto).
 // ===========================================================================
 std::vector<Rat> g_Rats;
-const float g_RatHalfSize = 0.18f;   // hitbox quadrada (mesma semi-largura em X e Z)
-const float g_RatScale = 0.0046f;    // escala do modelo 3D (rat.obj) para ~0.45 unidades de comprimento
+const float g_RatHalfSize = 0.18f; // hitbox quadrada (mesma semi-largura em X e Z)
+const float g_RatScale = 0.0046f;  // escala do modelo 3D (rat.obj) para ~0.45 unidades de comprimento
 const int g_NumRats = 6;
 const float g_RatScaredDuration = 3.5f; // segundos que o rato passa fugindo após ser tocado pelo jogador
 
@@ -332,14 +333,13 @@ GLint g_object_id_uniform;
 GLint g_bbox_min_uniform;
 GLint g_bbox_max_uniform;
 GLint g_texture_repeat_uniform;
-GLint g_light_position_uniform;  // posição da lanterna do personagem, em coordenadas de mundo
+GLint g_light_position_uniform;   // posição da lanterna do personagem, em coordenadas de mundo
 GLint g_light_visibility_uniform; // fração (0.0-1.0) de quanto a luz da lanterna alcança o objeto desenhado (suaviza a transição com a sombra das paredes)
 
 // Número de texturas carregadas pela função LoadTextureImage()
 GLuint g_NumLoadedTextures = 0;
 
 bool g_TopView = false;
-
 
 std::string FindFile(const std::string &path)
 {
@@ -438,11 +438,11 @@ int main(int argc, char *argv[])
     //
     LoadShadersFromFiles();
 
-    LoadTextureImage(FindFile("data/parede.png").c_str());   // TextureImage0
-    LoadTextureImage(FindFile("assets/sand.png").c_str());   // TextureImage1
-    LoadTextureImage(FindFile("assets/teto.png").c_str());   // TextureImage2
-    LoadTextureImage(FindFile("assets/smile.png").c_str());  // TextureImage3
-    LoadTextureImage(FindFile("assets/fur.png").c_str());     // TextureImage4
+    LoadTextureImage(FindFile("data/parede.png").c_str());  // TextureImage0
+    LoadTextureImage(FindFile("assets/sand.png").c_str());  // TextureImage1
+    LoadTextureImage(FindFile("assets/teto.png").c_str());  // TextureImage2
+    LoadTextureImage(FindFile("assets/smile.png").c_str()); // TextureImage3
+    LoadTextureImage(FindFile("assets/fur.png").c_str());   // TextureImage4
 
     // Construímos apenas o chão/grama.
     std::string plane_path = FindFile("data/plane.obj");
@@ -534,7 +534,8 @@ int main(int argc, char *argv[])
 
         GLint boolLocation = glGetUniformLocation(g_GpuProgramID, "c_top");
         glUniform1i(boolLocation, g_TopView ? 1 : 0);
-
+        GLint posLocation = glGetUniformLocation(g_GpuProgramID, "pPos");
+        glUniform3f(posLocation, g_PlayerPosition.x, g_PlayerPosition.y, g_PlayerPosition.z);
         // Compute delta time
         double currentTime = glfwGetTime();
         float dt = (float)(currentTime - lastTime);
@@ -587,20 +588,38 @@ int main(int argc, char *argv[])
 
         // Testa colisão do jogador (hitbox cúbica) contra as paredes do
         // labirinto, reaproveitando a mesma função usada pelos ratos.
-        auto collidesAt = [&](const glm::vec3 &testPos)
-        {
-            return MazeCollides(testPos.x, testPos.z, g_PlayerHalfWidth, g_PlayerHalfDepth);
-        };
-
         // Axis sliding: resolve X then Z so player can slide along walls.
+        const float eps = 0.05f;
         glm::vec3 tryPos = ConstrainPlayerToGround(prevPos);
         tryPos.x += moveDelta.x;
-        if (!collidesAt(tryPos))
+        if (!CollidesWithMaze(
+                tryPos,
+                g_PlayerHalfWidth,
+                g_PlayerHalfHeight,
+                g_PlayerHalfDepth,
+                eps,
+                mazeW,
+                mazeH,
+                cellSize,
+                g_OnlyBorderWalls,
+                wallHorz,
+                wallVert))
             prevPos.x = tryPos.x;
 
         tryPos = ConstrainPlayerToGround(prevPos);
         tryPos.z += moveDelta.z;
-        if (!collidesAt(tryPos))
+        if (!CollidesWithMaze(
+                tryPos,
+                g_PlayerHalfWidth,
+                g_PlayerHalfHeight,
+                g_PlayerHalfDepth,
+                eps,
+                mazeW,
+                mazeH,
+                cellSize,
+                g_OnlyBorderWalls,
+                wallHorz,
+                wallVert))
             prevPos.z = tryPos.z;
 
         g_PlayerPosition = ConstrainPlayerToGround(prevPos);
@@ -1768,7 +1787,7 @@ void PickFleeBezierLeg(Rat &rat, std::mt19937 &rng, glm::vec3 awayFrom)
             continue;
 
         float score = glm::dot(glm::vec2(candidateDir.x, candidateDir.z) / candidateLen,
-                                glm::vec2(fleeDir.x, fleeDir.z));
+                               glm::vec2(fleeDir.x, fleeDir.z));
 
         if (score > bestScore)
         {
@@ -1838,7 +1857,7 @@ void SpawnRats()
 // Avalia um ponto sobre a curva de Bézier cúbica definida pelos pontos de
 // controle p0..p3, no parâmetro t em [0,1].
 static glm::vec3 EvalCubicBezier(const glm::vec3 &p0, const glm::vec3 &p1,
-                                  const glm::vec3 &p2, const glm::vec3 &p3, float t)
+                                 const glm::vec3 &p2, const glm::vec3 &p3, float t)
 {
     float u = 1.0f - t;
     return u * u * u * p0 +
@@ -2024,7 +2043,7 @@ void CheckPlayerRatCollisions()
 // encontrar o ponto da AABB mais próximo do centro da esfera e comparar a
 // distância (ao quadrado) com o raio (ao quadrado) da esfera.
 bool SphereAabbIntersect(glm::vec3 sphereCenter, float sphereRadius,
-                          glm::vec3 boxCenter, glm::vec3 halfExtents)
+                         glm::vec3 boxCenter, glm::vec3 halfExtents)
 {
     glm::vec3 boxMin = boxCenter - halfExtents;
     glm::vec3 boxMax = boxCenter + halfExtents;
@@ -2041,7 +2060,7 @@ bool SphereAabbIntersect(glm::vec3 sphereCenter, float sphereRadius,
 // de jogo atual (ratos colidem apenas com paredes, por ora), mas fica
 // disponível para uma futura colisão jogador-rato ou rato-rato.
 bool AabbAabbIntersect(glm::vec3 centerA, glm::vec3 halfA,
-                        glm::vec3 centerB, glm::vec3 halfB)
+                       glm::vec3 centerB, glm::vec3 halfB)
 {
     glm::vec3 minA = centerA - halfA, maxA = centerA + halfA;
     glm::vec3 minB = centerB - halfB, maxB = centerB + halfB;
@@ -2152,47 +2171,299 @@ static void InitCubeSolid()
     float vertices[] = {
         // posição (x,y,z,w)      // normal (x,y,z,w)
         // front (+Z)
-        -h, -h, h, 1, 0, 0, 1, 0,
-        h, -h, h, 1, 0, 0, 1, 0,
-        h, h, h, 1, 0, 0, 1, 0,
-        h, h, h, 1, 0, 0, 1, 0,
-        -h, h, h, 1, 0, 0, 1, 0,
-        -h, -h, h, 1, 0, 0, 1, 0,
+        -h,
+        -h,
+        h,
+        1,
+        0,
+        0,
+        1,
+        0,
+        h,
+        -h,
+        h,
+        1,
+        0,
+        0,
+        1,
+        0,
+        h,
+        h,
+        h,
+        1,
+        0,
+        0,
+        1,
+        0,
+        h,
+        h,
+        h,
+        1,
+        0,
+        0,
+        1,
+        0,
+        -h,
+        h,
+        h,
+        1,
+        0,
+        0,
+        1,
+        0,
+        -h,
+        -h,
+        h,
+        1,
+        0,
+        0,
+        1,
+        0,
         // back (-Z)
-        h, -h, -h, 1, 0, 0, -1, 0,
-        -h, -h, -h, 1, 0, 0, -1, 0,
-        -h, h, -h, 1, 0, 0, -1, 0,
-        -h, h, -h, 1, 0, 0, -1, 0,
-        h, h, -h, 1, 0, 0, -1, 0,
-        h, -h, -h, 1, 0, 0, -1, 0,
+        h,
+        -h,
+        -h,
+        1,
+        0,
+        0,
+        -1,
+        0,
+        -h,
+        -h,
+        -h,
+        1,
+        0,
+        0,
+        -1,
+        0,
+        -h,
+        h,
+        -h,
+        1,
+        0,
+        0,
+        -1,
+        0,
+        -h,
+        h,
+        -h,
+        1,
+        0,
+        0,
+        -1,
+        0,
+        h,
+        h,
+        -h,
+        1,
+        0,
+        0,
+        -1,
+        0,
+        h,
+        -h,
+        -h,
+        1,
+        0,
+        0,
+        -1,
+        0,
         // left (-X)
-        -h, -h, -h, 1, -1, 0, 0, 0,
-        -h, -h, h, 1, -1, 0, 0, 0,
-        -h, h, h, 1, -1, 0, 0, 0,
-        -h, h, h, 1, -1, 0, 0, 0,
-        -h, h, -h, 1, -1, 0, 0, 0,
-        -h, -h, -h, 1, -1, 0, 0, 0,
+        -h,
+        -h,
+        -h,
+        1,
+        -1,
+        0,
+        0,
+        0,
+        -h,
+        -h,
+        h,
+        1,
+        -1,
+        0,
+        0,
+        0,
+        -h,
+        h,
+        h,
+        1,
+        -1,
+        0,
+        0,
+        0,
+        -h,
+        h,
+        h,
+        1,
+        -1,
+        0,
+        0,
+        0,
+        -h,
+        h,
+        -h,
+        1,
+        -1,
+        0,
+        0,
+        0,
+        -h,
+        -h,
+        -h,
+        1,
+        -1,
+        0,
+        0,
+        0,
         // right (+X)
-        h, -h, h, 1, 1, 0, 0, 0,
-        h, -h, -h, 1, 1, 0, 0, 0,
-        h, h, -h, 1, 1, 0, 0, 0,
-        h, h, -h, 1, 1, 0, 0, 0,
-        h, h, h, 1, 1, 0, 0, 0,
-        h, -h, h, 1, 1, 0, 0, 0,
+        h,
+        -h,
+        h,
+        1,
+        1,
+        0,
+        0,
+        0,
+        h,
+        -h,
+        -h,
+        1,
+        1,
+        0,
+        0,
+        0,
+        h,
+        h,
+        -h,
+        1,
+        1,
+        0,
+        0,
+        0,
+        h,
+        h,
+        -h,
+        1,
+        1,
+        0,
+        0,
+        0,
+        h,
+        h,
+        h,
+        1,
+        1,
+        0,
+        0,
+        0,
+        h,
+        -h,
+        h,
+        1,
+        1,
+        0,
+        0,
+        0,
         // top (+Y)
-        -h, h, h, 1, 0, 1, 0, 0,
-        h, h, h, 1, 0, 1, 0, 0,
-        h, h, -h, 1, 0, 1, 0, 0,
-        h, h, -h, 1, 0, 1, 0, 0,
-        -h, h, -h, 1, 0, 1, 0, 0,
-        -h, h, h, 1, 0, 1, 0, 0,
+        -h,
+        h,
+        h,
+        1,
+        0,
+        1,
+        0,
+        0,
+        h,
+        h,
+        h,
+        1,
+        0,
+        1,
+        0,
+        0,
+        h,
+        h,
+        -h,
+        1,
+        0,
+        1,
+        0,
+        0,
+        h,
+        h,
+        -h,
+        1,
+        0,
+        1,
+        0,
+        0,
+        -h,
+        h,
+        -h,
+        1,
+        0,
+        1,
+        0,
+        0,
+        -h,
+        h,
+        h,
+        1,
+        0,
+        1,
+        0,
+        0,
         // bottom (-Y)
-        -h, -h, -h, 1, 0, -1, 0, 0,
-        h, -h, -h, 1, 0, -1, 0, 0,
-        h, -h, h, 1, 0, -1, 0, 0,
-        h, -h, h, 1, 0, -1, 0, 0,
-        -h, -h, h, 1, 0, -1, 0, 0,
-        -h, -h, -h, 1, 0, -1, 0, 0,
+        -h,
+        -h,
+        -h,
+        1,
+        0,
+        -1,
+        0,
+        0,
+        h,
+        -h,
+        -h,
+        1,
+        0,
+        -1,
+        0,
+        0,
+        h,
+        -h,
+        h,
+        1,
+        0,
+        -1,
+        0,
+        0,
+        h,
+        -h,
+        h,
+        1,
+        0,
+        -1,
+        0,
+        0,
+        -h,
+        -h,
+        h,
+        1,
+        0,
+        -1,
+        0,
+        0,
+        -h,
+        -h,
+        -h,
+        1,
+        0,
+        -1,
+        0,
+        0,
     };
 
     GLuint VBO;
@@ -2220,7 +2491,7 @@ static void InitCubeSolid()
 // matrizes "view" e "projection" devem ser as mesmas usadas para o resto da
 // cena, garantindo que o cubo apareça corretamente posicionado/ocluso.
 static void DrawSolidCube(const glm::mat4 &model, const glm::mat4 &view,
-                           const glm::mat4 &projection, float r, float g, float b, float a)
+                          const glm::mat4 &projection, float r, float g, float b, float a)
 {
     InitCubeSolid();
 
@@ -2279,8 +2550,8 @@ void DrawPlayerCharacter(glm::vec3 position, float yaw, const glm::mat4 &view, c
     auto part = [&](float cx, float cy, float cz, float sx, float sy, float sz, glm::vec3 color)
     {
         glm::mat4 model = baseModel *
-                           Matrix_Translate(cx, cy, cz) *
-                           Matrix_Scale(sx, sy, sz);
+                          Matrix_Translate(cx, cy, cz) *
+                          Matrix_Scale(sx, sy, sz);
         DrawSolidCube(model, view, projection, color.r, color.g, color.b, 1.0f);
     };
 
@@ -2321,7 +2592,6 @@ void DrawPlayerCharacter(glm::vec3 position, float yaw, const glm::mat4 &view, c
     part(armOffsetX, lanternY, lanternForward * 0.6f, lanternSize, lanternSize * 1.3f, lanternSize, kLanternBodyColor);
     part(armOffsetX, lanternY, lanternForward * 0.6f + lanternSize * 0.55f, lanternSize * 0.7f, lanternSize * 0.7f, lanternSize * 0.35f, kLanternLightColor);
 }
-
 
 // para o painel de fundo da tela de fim de jogo). Implementado com um
 // programa de GPU próprio e bem simples (posição 2D em NDC + cor sólida),

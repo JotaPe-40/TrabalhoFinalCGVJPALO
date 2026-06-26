@@ -265,6 +265,29 @@ float g_PlayerEyeHeight = 0.6f;
 float g_PlayerHalfWidth = 0.30f;
 float g_PlayerHalfHeight = 0.30f;
 float g_PlayerHalfDepth = 0.30f;
+
+// ===========================================================================
+// Animação de andar do boneco (ver DrawPlayerCharacter()): em vez de uma
+// pose estática, braços e pernas oscilam como um pêndulo (cada perna em
+// fase oposta ao braço do mesmo lado, como em uma caminhada normal) sempre
+// que o jogador está efetivamente se movendo pelo labirinto.
+//
+// "g_PlayerWalkPhase" acumula ao longo do tempo (em radianos) e é a entrada
+// de uma função seno usada para gerar o balanço de cada membro; avança com
+// base na DISTÂNCIA percorrida pelo jogador (não diretamente no tempo), de
+// modo que o ciclo da passada acompanhe a velocidade real do personagem
+// (caminhando rápido = passadas mais rápidas) e fique parado quando o
+// jogador está parado, em vez de depender do framerate.
+float g_PlayerWalkPhase = 0.0f;
+
+// Quão rápido a fase de caminhada avança por unidade de distância percorrida
+// (radianos por unidade de mundo). Calibrado para parecer uma passada normal
+// na velocidade padrão do jogador (g_PlayerSpeed).
+const float g_PlayerWalkPhaseSpeed = 9.0f;
+
+// Amplitude máxima (radianos) do balanço de pernas/braços ao redor do quadril/
+// ombro durante a animação de andar.
+const float g_PlayerWalkSwingAmplitude = 0.55f;
 bool g_FpsMode = true; // enable FPS camera and controls
 bool g_FirstMouse = true;
 // Last cursor positions (used by mouse callbacks and FPS init)
@@ -443,6 +466,7 @@ int main(int argc, char *argv[])
     LoadTextureImage(FindFile("assets/teto.png").c_str());   // TextureImage2
     LoadTextureImage(FindFile("assets/smile.png").c_str());  // TextureImage3
     LoadTextureImage(FindFile("assets/fur.png").c_str());     // TextureImage4
+    LoadTextureImage(FindFile("assets/globo.png").c_str());   // TextureImage5 (paredes "globo", sorteadas aleatoriamente em AssignWallTextures())
 
     // Construímos apenas o chão/grama.
     std::string plane_path = FindFile("data/plane.obj");
@@ -561,6 +585,7 @@ int main(int argc, char *argv[])
             speed *= 2.0f;
 
         glm::vec3 prevPos = g_PlayerPosition;
+        glm::vec3 playerPosBeforeMove = g_PlayerPosition; // usado só para medir a distância percorrida neste frame (animação de andar)
         glm::vec3 moveDelta = glm::vec3(0.0f, 0.0f, 0.0f);
 
         // Quando o jogo termina (jogador encostou no smile), o movimento do
@@ -604,6 +629,20 @@ int main(int argc, char *argv[])
             prevPos.z = tryPos.z;
 
         g_PlayerPosition = ConstrainPlayerToGround(prevPos);
+
+        // Avança a fase da animação de andar proporcionalmente à distância
+        // realmente percorrida pelo jogador neste frame (no plano XZ, já
+        // descontando colisões com paredes que tenham bloqueado o
+        // movimento) - e não diretamente por "dt" - para que o ciclo da
+        // passada acompanhe a velocidade real do personagem e fique
+        // completamente parado quando o jogador não anda (incluindo quando
+        // uma tecla é pressionada contra uma parede e o movimento é
+        // bloqueado pela colisão).
+        {
+            glm::vec3 actualDelta = g_PlayerPosition - playerPosBeforeMove;
+            float distanceMoved = glm::length(glm::vec2(actualDelta.x, actualDelta.z));
+            g_PlayerWalkPhase += distanceMoved * g_PlayerWalkPhaseSpeed;
+        }
 
         // Atualiza a simulação dos ratinhos (movimento aleatório via Bézier)
         // e testa a colisão cubo-esfera entre o jogador e o smile, além da
@@ -753,6 +792,7 @@ int main(int argc, char *argv[])
 #define WALL 3
 #define TETO 4
 #define RAT 5
+#define WALL_GLOBE 6
 
         float mazeSizeX = mazeW * cellSize;
         float mazeSizeZ = mazeH * cellSize;
@@ -841,6 +881,12 @@ int main(int argc, char *argv[])
 
                     glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(wm));
 
+                    // Cada parede individualmente sorteada como "globo" (ver
+                    // AssignWallTextures() em maze.cpp) usa a textura de
+                    // globo (TextureImage5) em vez da textura padrão de
+                    // tijolos; as demais continuam usando WALL normalmente.
+                    glUniform1i(g_object_id_uniform, wallHorzIsGlobe[i][j] ? WALL_GLOBE : WALL);
+
                     glm::vec3 wallCenter = glm::vec3(x, g_GroundY + wallHeight / 2.0f, z);
                     glUniform1f(g_light_visibility_uniform, ComputeLightVisibility(lanternPos, wallCenter, cellSize * 0.5f));
 
@@ -866,6 +912,10 @@ int main(int argc, char *argv[])
                         Matrix_Translate(x, g_GroundY + wallHeight / 2.0f, z) * Matrix_Scale(wallThickness, wallHeight, cellSize);
 
                     glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(wm));
+
+                    // Mesma lógica de escolha de textura usada nas paredes
+                    // horizontais acima, aplicada agora às paredes verticais.
+                    glUniform1i(g_object_id_uniform, wallVertIsGlobe[i][j] ? WALL_GLOBE : WALL);
 
                     glm::vec3 wallCenter = glm::vec3(x, g_GroundY + wallHeight / 2.0f, z);
                     glUniform1f(g_light_visibility_uniform, ComputeLightVisibility(lanternPos, wallCenter, cellSize * 0.5f));
@@ -1218,6 +1268,7 @@ void LoadShadersFromFiles()
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage2"), 2);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage3"), 3);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage4"), 4);
+    glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage5"), 5);
     g_texture_repeat_uniform = glGetUniformLocation(g_GpuProgramID, "TextureRepeat");
     glUseProgram(0);
 }
@@ -1632,6 +1683,12 @@ void RandomizeStartAndGoalCells()
     int playerCol = colDist(g_RatRng);
 
     GenerateMaze(playerRow, playerCol);
+
+    // Sorteia quais paredes deste novo labirinto recebem a textura "globo"
+    // em vez da textura padrão "brick", respeitando a taxa de spawn e o
+    // espaçamento mínimo configurados em maze.cpp (kGlobeWallSpawnRate,
+    // kMinBrickWallsBetweenGlobeWalls).
+    AssignWallTextures();
 
     // Sorteia a célula do smile, evitando repetir a célula do jogador.
     int smileRow, smileCol;
@@ -2284,23 +2341,66 @@ void DrawPlayerCharacter(glm::vec3 position, float yaw, const glm::mat4 &view, c
         DrawSolidCube(model, view, projection, color.r, color.g, color.b, 1.0f);
     };
 
-    // Pernas (levemente separadas no eixo X local).
-    part(-legWidth * 0.55f, legCenterY, 0.0f, legWidth, legHeight, legWidth, kPantsColor);
-    part(legWidth * 0.55f, legCenterY, 0.0f, legWidth, legHeight, legWidth, kPantsColor);
+    // Variante de "part" que primeiro roda a peça em torno do eixo X local
+    // (pitch), pivotando em um ponto de articulação (pivotY) acima/abaixo do
+    // centro da própria peça - usada para o balanço de pernas/braços da
+    // animação de andar, simulando uma articulação de quadril/ombro em vez
+    // de rotacionar a peça em torno do seu próprio centro geométrico.
+    auto swingingPart = [&](float cx, float pivotY, float cz, float sx, float sy, float sz,
+                             float lengthBelowPivot, float lengthAbovePivot, float swingAngle, glm::vec3 color)
+    {
+        // Centro da peça relativo ao pivô: metade para cada lado, conforme
+        // quanto da peça fica abaixo/acima do ponto de articulação.
+        float centerOffsetY = (lengthAbovePivot - lengthBelowPivot) * 0.5f;
 
-    // Botas (pequeno cubo escuro na base de cada perna).
+        glm::mat4 model = baseModel *
+                           Matrix_Translate(cx, pivotY, cz) *
+                           Matrix_Rotate_X(swingAngle) *
+                           Matrix_Translate(0.0f, centerOffsetY, 0.0f) *
+                           Matrix_Scale(sx, sy, sz);
+        DrawSolidCube(model, view, projection, color.r, color.g, color.b, 1.0f);
+    };
+
+    // Ângulo de balanço atual de cada perna/braço, derivado da fase de
+    // caminhada global (g_PlayerWalkPhase, atualizada no laço principal
+    // proporcionalmente à distância percorrida pelo jogador). Pernas e
+    // braços do mesmo lado oscilam em fases opostas (perna esquerda para
+    // frente quando o braço esquerdo vai para trás, como em uma caminhada
+    // normal); o lado direito usa a fase oposta ao esquerdo.
+    float leftSwing = sinf(g_PlayerWalkPhase) * g_PlayerWalkSwingAmplitude;
+    float rightSwing = -leftSwing;
+
+    // Pernas (levemente separadas no eixo X local), articuladas no quadril
+    // (topo da perna, altura "feetY + legHeight").
+    float hipY = feetY + legHeight;
+    swingingPart(-legWidth * 0.55f, hipY, 0.0f, legWidth, legHeight, legWidth,
+                 legHeight, 0.0f, leftSwing, kPantsColor);
+    swingingPart(legWidth * 0.55f, hipY, 0.0f, legWidth, legHeight, legWidth,
+                 legHeight, 0.0f, rightSwing, kPantsColor);
+
+    // Botas (pequeno cubo escuro na base de cada perna), seguindo o mesmo
+    // balanço da perna correspondente (mesmo pivô no quadril, mesmo ângulo),
+    // para que fiquem "presas" ao pé em vez de ficarem paradas no chão
+    // enquanto a perna se move.
     float bootHeight = legHeight * 0.22f;
-    part(-legWidth * 0.55f, feetY + bootHeight * 0.5f, legWidth * 0.08f, legWidth * 1.05f, bootHeight, legWidth * 1.25f, kBootColor);
-    part(legWidth * 0.55f, feetY + bootHeight * 0.5f, legWidth * 0.08f, legWidth * 1.05f, bootHeight, legWidth * 1.25f, kBootColor);
+    swingingPart(-legWidth * 0.55f, hipY, legWidth * 0.08f, legWidth * 1.05f, bootHeight, legWidth * 1.25f,
+                 legHeight - bootHeight * 0.5f, 0.0f, leftSwing, kBootColor);
+    swingingPart(legWidth * 0.55f, hipY, legWidth * 0.08f, legWidth * 1.05f, bootHeight, legWidth * 1.25f,
+                 legHeight - bootHeight * 0.5f, 0.0f, rightSwing, kBootColor);
 
     // Torso (camisa).
     part(0.0f, torsoCenterY, 0.0f, torsoWidth, torsoHeight, torsoDepth, kShirtColor);
 
     // Braços (pele exposta abaixo de uma manga curta, simplificado como um
-    // único cubo cor de pele por braço, posicionados nas laterais do torso).
+    // único cubo cor de pele por braço, posicionados nas laterais do torso),
+    // articulados no ombro (topo do braço) e balançando em fase oposta à
+    // perna do mesmo lado.
     float armOffsetX = torsoWidth * 0.5f + armWidth * 0.5f;
-    part(-armOffsetX, torsoCenterY + torsoHeight * 0.05f, 0.0f, armWidth, armHeight, armWidth, kSkinColor);
-    part(armOffsetX, torsoCenterY + torsoHeight * 0.05f, 0.0f, armWidth, armHeight, armWidth, kSkinColor);
+    float shoulderY = torsoCenterY + torsoHeight * 0.05f + armHeight * 0.5f;
+    swingingPart(-armOffsetX, shoulderY, 0.0f, armWidth, armHeight, armWidth,
+                 armHeight, 0.0f, rightSwing, kSkinColor);
+    swingingPart(armOffsetX, shoulderY, 0.0f, armWidth, armHeight, armWidth,
+                 armHeight, 0.0f, leftSwing, kSkinColor);
 
     // Cabeça.
     part(0.0f, headCenterY, 0.0f, headSize, headSize, headSize, kSkinColor);
@@ -2314,7 +2414,11 @@ void DrawPlayerCharacter(glm::vec3 position, float yaw, const glm::mat4 &view, c
     // Lanterna na mão direita (do ponto de vista do personagem): um pequeno
     // cubo cinza (corpo) com uma face amarelo-claro (luz) na frente, presa
     // à frente do braço direito, um pouco abaixo do ombro, como se o
-    // personagem a estivesse segurando esticada para frente.
+    // personagem a estivesse segurando esticada para frente. Para manter a
+    // lanterna sempre apontando para frente (e não balançando junto com o
+    // braço, o que faria a luz "varrer" o chão de forma estranha durante a
+    // caminhada), ela é desenhada fora da hierarquia rotacionada do braço,
+    // na posição neutra (sem aplicar swingingPart).
     float lanternSize = armWidth * 0.9f;
     float lanternForward = torsoDepth * 0.5f + lanternSize * 0.6f;
     float lanternY = torsoCenterY - torsoHeight * 0.15f;

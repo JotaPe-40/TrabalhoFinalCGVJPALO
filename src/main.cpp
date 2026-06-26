@@ -160,6 +160,7 @@ void PrintObjModelInfo(ObjModel *);                                          // 
 glm::vec3 ComputeSmilePosition();                                   // Posição (mundo) do centro do smile na célula configurada
 glm::vec3 ComputeLanternPosition();                                  // Posição (mundo) da lanterna do personagem, fonte de luz principal da cena
 float ComputeLightVisibility(glm::vec3 lightPos, glm::vec3 targetPos, float sampleRadius); // Fração (0-1) de quanto a luz alcança um objeto, suavizando a transição com a sombra
+void UpdateVertexLightWeights(const char *object_name, const glm::mat4 &model, glm::vec3 lightPos); // Recalcula e envia à GPU o peso de luz POR VÉRTICE de um objeto (cubo), para sombras suaves ao longo da própria face
 void RandomizeStartAndGoalCells();                                   // Sorteia células (distintas) para o jogador e o smile, e regenera o labirinto a partir da célula do jogador
 void SpawnRats();                                                   // Cria/recria os ratinhos em posições aleatórias válidas
 glm::vec3 RandomPointInsideMaze(std::mt19937 &rng);                 // Sorteia um ponto de mundo dentro do labirinto
@@ -216,6 +217,14 @@ struct SceneObject
     GLuint vertex_array_object_id; // ID do VAO onde estão armazenados os atributos do modelo
     glm::vec3 bbox_min;            // Axis-Aligned Bounding Box do objeto
     glm::vec3 bbox_max;
+    // VBO dinâmico (GL_DYNAMIC_DRAW) com o peso de visibilidade de luz POR
+    // VÉRTICE (location 3 no vertex shader), usado para suavizar a sombra
+    // ao longo da própria superfície de um objeto (em vez de um único valor
+    // uniforme por chamada de desenho). 0 quando o objeto não usa esse
+    // atributo (mantém o valor antigo do uniform "light_visibility" via
+    // fallback no fragment shader). Ver UpdateVertexLightWeights().
+    GLuint vertex_light_weight_vbo_id = 0;
+    size_t num_vertices = 0; // número de vértices (não de índices) - tamanho esperado do VBO acima
 };
 
 // Abaixo definimos variáveis globais utilizadas em várias funções do código.
@@ -225,6 +234,14 @@ struct SceneObject
 // objetos dentro da variável g_VirtualScene, e veja na função main() como
 // estes são acessados.
 std::map<std::string, SceneObject> g_VirtualScene;
+
+// Posições locais (espaço do modelo) de cada vértice de "wall_cube" (e de
+// qualquer outro objeto construído por BuildCubeAndAddToVirtualScene), na
+// MESMA ordem em que aparecem no VBO de posições - usadas por
+// UpdateVertexLightWeights() para calcular o peso de luz de cada vértice a
+// partir da sua posição local dentro do cubo (qual extremidade da parede ele
+// ocupa), sem precisar reconstruir a geometria a cada frame.
+std::map<std::string, std::vector<glm::vec3>> g_CubeLocalVertexPositions;
 
 // Pilha que guardará as matrizes de modelagem.
 std::stack<glm::mat4> g_MatrixStack;
@@ -461,6 +478,17 @@ int main(int argc, char *argv[])
     //
     LoadShadersFromFiles();
 
+    // Define o valor GENÉRICO padrão (1.0 = totalmente iluminado / "sem
+    // efeito") do atributo de vértice "vertex_light_weight" (location 3 no
+    // vertex shader). Este valor só é realmente usado pela GPU quando o
+    // array de atributos correspondente está DESABILITADO no VAO ativo (ou
+    // seja, para todo objeto que não usa o VBO dinâmico de peso de luz por
+    // vértice criado em BuildCubeAndAddToVirtualScene/UpdateVertexLightWeights,
+    // como a esfera do smile, o rato, o teto, etc.) - garantindo que esses
+    // objetos continuem se comportando exatamente como antes (dependendo
+    // apenas do uniform "light_visibility" por objeto).
+    glVertexAttrib1f(3, 1.0f);
+
     LoadTextureImage(FindFile("data/parede.png").c_str());   // TextureImage0
     LoadTextureImage(FindFile("assets/sand.png").c_str());   // TextureImage1
     LoadTextureImage(FindFile("assets/teto.png").c_str());   // TextureImage2
@@ -484,6 +512,18 @@ int main(int argc, char *argv[])
 
     // Constrói o cubo usado para as paredes do labirinto
     BuildCubeAndAddToVirtualScene(1.0f, "wall_cube");
+
+    // Reaproveita a MESMA geometria/infra do cubo (incluindo o VBO dinâmico
+    // de peso de luz por vértice) para um "ladrilho" de chão: o chão deixa
+    // de ser desenhado como um único quad gigante cobrindo o labirinto
+    // inteiro (data/plane.obj, escalado) e passa a ser desenhado CÉLULA A
+    // CÉLULA, um pequeno cubo bem fino (achatado em Y) por célula do
+    // labirinto. Isso permite calcular e vetorizar a visibilidade da luz
+    // por vértice TAMBÉM no chão, em vez de um valor fixo "totalmente
+    // iluminado" - corrigindo o vazamento de luz por baixo das paredes
+    // (antes a luz da lanterna atravessava paredes no plano do piso, já
+    // que o chão nunca testava oclusão).
+    BuildCubeAndAddToVirtualScene(1.0f, "floor_tile");
 
     // Carrega o modelo 3D do ratinho (convertido de assets/rat.stl para
     // data/rat.obj, com eixos já remapeados para a convenção do motor:
@@ -797,17 +837,48 @@ int main(int argc, char *argv[])
         float mazeSizeX = mazeW * cellSize;
         float mazeSizeZ = mazeH * cellSize;
 
-        // Chão
-        model = Matrix_Translate(0.0f, g_GroundY, 0.0f) * Matrix_Scale(mazeSizeX, 1.0f, mazeSizeZ);
-
-        glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
+        // Chão: desenhado CÉLULA A CÉLULA (em vez de um único quad gigante
+        // cobrindo o labirinto inteiro) usando o mesmo "floor_tile" (cubo
+        // fino) para todas as células, justamente para podermos calcular e
+        // vetorizar por vértice a visibilidade da luz da lanterna também no
+        // piso - testando oclusão por parede em cada um dos 4 cantos de
+        // CADA célula. Isso corrige a luz "vazando" por baixo das paredes
+        // (antes o chão usava sempre light_visibility = 1.0, sem nenhum
+        // teste de oclusão, então a luz da lanterna atravessava paredes no
+        // plano do piso).
         glUniform1i(g_object_id_uniform, PLANE);
-        glUniform1f(g_light_visibility_uniform, 1.0f);
 
         if (g_texture_repeat_uniform != -1)
-            glUniform1f(g_texture_repeat_uniform, mazeW);
+            glUniform1f(g_texture_repeat_uniform, 1.0f);
 
-        DrawVirtualObject("the_plane");
+        // Altura bem pequena para o "ladrilho" parecer um plano fino, e não
+        // um cubo visível (sua face de cima é a única que realmente importa
+        // visualmente; o resto fica abaixo do nível do piso/oculto).
+        const float kFloorTileThickness = 0.02f;
+
+        for (int i = 0; i < mazeH; i++)
+        {
+            for (int j = 0; j < mazeW; j++)
+            {
+                float x = (j - mazeW / 2.0f + 0.5f) * cellSize;
+                float z = (i - mazeH / 2.0f + 0.5f) * cellSize;
+
+                glm::mat4 tileModel =
+                    Matrix_Translate(x, g_GroundY - kFloorTileThickness * 0.5f, z) *
+                    Matrix_Scale(cellSize, kFloorTileThickness, cellSize);
+
+                glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(tileModel));
+
+                // Mantém um piso de iluminação ambiente baixo via o uniform
+                // "de objeto" (igual ao comportamento anterior), e refina
+                // com o peso por vértice calculado abaixo (oclusão real por
+                // parede em cada canto da célula).
+                glUniform1f(g_light_visibility_uniform, 1.0f);
+                UpdateVertexLightWeights("floor_tile", tileModel, lanternPos);
+
+                DrawVirtualObject("floor_tile");
+            }
+        }
 
         // Esfera dentro do labirinto (objetivo do jogador). A hitbox desta
         // esfera é usada para a colisão jogador-smile (cubo-esfera).
@@ -890,6 +961,13 @@ int main(int argc, char *argv[])
                     glm::vec3 wallCenter = glm::vec3(x, g_GroundY + wallHeight / 2.0f, z);
                     glUniform1f(g_light_visibility_uniform, ComputeLightVisibility(lanternPos, wallCenter, cellSize * 0.5f));
 
+                    // Vetorização da iluminação por vértice: recalcula a
+                    // visibilidade da luz em cada um dos 8 cantos desta
+                    // parede (em vez de um único valor para a parede
+                    // inteira), suavizando a transição da sombra ao longo
+                    // da própria face quando ela está parcialmente ocluída.
+                    UpdateVertexLightWeights("wall_cube", wm, lanternPos);
+
                     DrawVirtualObject("wall_cube");
                 }
             }
@@ -919,6 +997,10 @@ int main(int argc, char *argv[])
 
                     glm::vec3 wallCenter = glm::vec3(x, g_GroundY + wallHeight / 2.0f, z);
                     glUniform1f(g_light_visibility_uniform, ComputeLightVisibility(lanternPos, wallCenter, cellSize * 0.5f));
+
+                    // Mesma vetorização por vértice aplicada acima às
+                    // paredes horizontais, agora para as paredes verticais.
+                    UpdateVertexLightWeights("wall_cube", wm, lanternPos);
 
                     DrawVirtualObject("wall_cube");
                 }
@@ -1110,6 +1192,24 @@ void BuildCubeAndAddToVirtualScene(float size, const char *name)
     glVertexAttribPointer(location, 2, GL_FLOAT, GL_FALSE, 0, 0);
     glEnableVertexAttribArray(location);
 
+    // VBO dinâmico (location 3) com o peso de visibilidade de luz por
+    // vértice: começa todo em 1.0 (totalmente iluminado) e é sobrescrito a
+    // cada frame, por instância de parede desenhada, em
+    // UpdateVertexLightWeights() - permitindo que a sombra se espalhe
+    // suavemente AO LONGO da própria face da parede (vetorização da
+    // iluminação por vértice / shading tipo Gouraud para a visibilidade),
+    // em vez de um valor único e abrupto por parede.
+    size_t numVertices = model_coefficients.size() / 4;
+    std::vector<float> initialLightWeights(numVertices, 1.0f);
+
+    GLuint VBO_light_weight_id;
+    glGenBuffers(1, &VBO_light_weight_id);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO_light_weight_id);
+    glBufferData(GL_ARRAY_BUFFER, initialLightWeights.size() * sizeof(float), initialLightWeights.data(), GL_DYNAMIC_DRAW);
+    location = 3;
+    glVertexAttribPointer(location, 1, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(location);
+
     GLuint indices_id;
     glGenBuffers(1, &indices_id);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indices_id);
@@ -1125,7 +1225,23 @@ void BuildCubeAndAddToVirtualScene(float size, const char *name)
     theobject.vertex_array_object_id = vertex_array_object_id;
     theobject.bbox_min = glm::vec3(-h, -h, -h);
     theobject.bbox_max = glm::vec3(h, h, h);
+    theobject.vertex_light_weight_vbo_id = VBO_light_weight_id;
+    theobject.num_vertices = numVertices;
     g_VirtualScene[name] = theobject;
+
+    // Guarda também as posições locais (x,y,z) de cada vértice do cubo, na
+    // mesma ordem em que foram emitidas acima, para que
+    // UpdateVertexLightWeights() saiba calcular o peso de cada vértice a
+    // partir da sua posição local (canto "esquerdo" ou "direito" da parede
+    // ao longo do seu eixo mais longo).
+    g_CubeLocalVertexPositions[name].clear();
+    for (size_t k = 0; k < numVertices; k++)
+    {
+        g_CubeLocalVertexPositions[name].push_back(glm::vec3(
+            model_coefficients[k * 4 + 0],
+            model_coefficients[k * 4 + 1],
+            model_coefficients[k * 4 + 2]));
+    }
 }
 
 // Função que carrega uma imagem para ser utilizada como textura
@@ -1665,6 +1781,56 @@ float ComputeLightVisibility(glm::vec3 lightPos, glm::vec3 targetPos, float samp
     }
 
     return (float)visibleCount / (float)kNumOffsets;
+}
+
+// ---------------------------------------------------------------------------
+// Vetorização da iluminação por vértice (sombras suaves ao longo da própria
+// face de um objeto).
+// ---------------------------------------------------------------------------
+//
+// Antes, a visibilidade da luz da lanterna (oclusão por paredes do
+// labirinto) era um único valor "uniform" por chamada de desenho: a parede
+// inteira recebia o MESMO peso de sombra, calculado em um único ponto
+// (aproximadamente o centro da parede). Isso já evitava o corte abrupto
+// "tudo ou nada" ENTRE paredes vizinhas (uma parede totalmente clara ao lado
+// de outra totalmente escura), mas ainda produzia uma transição abrupta
+// DENTRO da própria face de uma parede longa que estivesse parcialmente na
+// sombra (ex.: metade dela ainda dentro do alcance da lanterna, metade já
+// ocluída por uma parede adjacente).
+//
+// Esta função calcula a visibilidade da luz em CADA VÉRTICE da parede
+// (reaproveitando LightReachesPointExact ponto a ponto, sem a amostragem em
+// disco usada por ComputeLightVisibility, já que aqui cada vértice já É um
+// ponto específico da geometria), e envia esses pesos individuais para a
+// GPU através do VBO dinâmico de "light weight" (location 3 no vertex
+// shader). O rasterizador então INTERPOLA esse peso entre os vértices de
+// cada triângulo (exatamente como faz com cor/normais no Gouraud shading),
+// produzindo uma transição suave e contínua da sombra ao longo da face,
+// proporcional à distância de cada ponto até a "borda" da oclusão.
+void UpdateVertexLightWeights(const char *object_name, const glm::mat4 &model, glm::vec3 lightPos)
+{
+    auto sceneIt = g_VirtualScene.find(object_name);
+    auto localPosIt = g_CubeLocalVertexPositions.find(object_name);
+    if (sceneIt == g_VirtualScene.end() || localPosIt == g_CubeLocalVertexPositions.end())
+        return;
+
+    SceneObject &obj = sceneIt->second;
+    const std::vector<glm::vec3> &localPositions = localPosIt->second;
+
+    if (obj.vertex_light_weight_vbo_id == 0 || localPositions.size() != obj.num_vertices)
+        return;
+
+    std::vector<float> weights(obj.num_vertices);
+    for (size_t k = 0; k < obj.num_vertices; k++)
+    {
+        glm::vec4 worldPos4 = model * glm::vec4(localPositions[k], 1.0f);
+        glm::vec3 worldPos = glm::vec3(worldPos4.x, worldPos4.y, worldPos4.z);
+        weights[k] = LightReachesPointExact(lightPos, worldPos) ? 1.0f : 0.0f;
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, obj.vertex_light_weight_vbo_id);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, weights.size() * sizeof(float), weights.data());
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 // Sorteia uma célula aleatória para o jogador nascer, regenera o labirinto
